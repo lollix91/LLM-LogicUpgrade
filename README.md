@@ -208,7 +208,7 @@ The model can also be changed at runtime from the Web UI settings panel.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/chat` | Send a message through the reasoning pipeline |
+| `POST` | `/api/chat` | Send a message through the reasoning pipeline (`skip_logic=true` bypasses DALI2) |
 | `GET` | `/api/capabilities` | List available schemas and micro-theories |
 | `GET` | `/api/health` | Health check (model, backend) |
 | `GET` | `/api/model` | Current and available models |
@@ -219,7 +219,7 @@ Full API docs at `http://localhost:8000/docs` (Swagger UI).
 
 ## Benchmark
 
-A benchmark suite is included to evaluate the system against standardized logic questions.
+A benchmark suite compares **LLM+DALI2** (full neuro-symbolic pipeline) against **pure LLM** (no logic engine) on standardized logic questions.
 
 ### Build the dataset
 
@@ -245,7 +245,13 @@ python benchmark/run_benchmark.py --start 100 --limit 20
 python benchmark/run_benchmark.py --output benchmark/my_results.csv
 ```
 
-Output CSV columns: `question_id`, `question_text`, `correct_answer`, `system_answer`, `is_correct`, `has_logic`, `schema_used`, `response_time_s`, `full_response`.
+For each question the benchmark sends two requests to the orchestrator:
+1. `skip_logic=False` — full pipeline (LLM extraction → DALI2 → synthesis)
+2. `skip_logic=True` — direct LLM response (no logic engine)
+
+Output CSV columns: `question_id`, `question`, `expected_answer`, `llm_dali2_answer`, `pure_llm_answer`.
+
+A summary with accuracy percentages for both modes is printed at the end.
 
 ## License
 
