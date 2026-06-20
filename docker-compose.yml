@@ -1,0 +1,89 @@
+services:
+  # --- Redis (shared message bus) ---
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # --- Ollama (LLM inference with GPU) ---
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  # --- DALI2 (logic engine) ---
+  dali2:
+    image: lollix91/dali2:latest
+    init: true
+    ports:
+      - "${DALI2_PORT:-8080}:8080"
+    volumes:
+      - ./dali2-agents:/dali2/examples
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    command: ["8080", "examples/logic_solver.pl"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --- Orchestrator (FastAPI pipeline) ---
+  orchestrator:
+    build:
+      context: ./orchestrator
+    ports:
+      - "${ORCHESTRATOR_PORT:-8000}:8000"
+    volumes:
+      - ./orchestrator/app:/app/app
+      - ./orchestrator/data:/app/data
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - DALI2_URL=http://dali2:8080
+      - REDIS_URL=redis://redis:6379
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3.5:9b}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+      dali2:
+        condition: service_started
+    restart: unless-stopped
+
+  # --- Web UI (React frontend) ---
+  web-ui:
+    build:
+      context: ./web-ui
+    ports:
+      - "${WEBUI_PORT:-3000}:80"
+    depends_on:
+      - orchestrator
+    restart: unless-stopped
+
+volumes:
+  ollama-data:
