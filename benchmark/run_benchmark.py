@@ -23,7 +23,7 @@ import httpx
 # --- Configuration ---
 ORCHESTRATOR_URL = "http://localhost:8000"
 QUESTIONS_FILE = Path(__file__).parent.parent / "domande-risposte-logica.txt"
-LOGIC_CSV = Path(__file__).parent / "logic_questions.csv"
+LOGIC_CSV = Path(__file__).parent / "logic_questions_en.csv"
 DEFAULT_OUTPUT = Path(__file__).parent / "results.csv"
 
 # Questions referencing images/diagrams that we skip
@@ -153,27 +153,35 @@ def should_skip(question: dict) -> bool:
 def format_question_prompt(question: dict) -> str:
     """Format a question into a prompt for the LLM."""
     parts = [question["text"]]
-    for key in sorted(question.get("options", {}).keys()):
+    option_keys = sorted(question.get("options", {}).keys())
+    for key in option_keys:
         parts.append(f"{key}) {question['options'][key]}")
-    parts.append("\nRispondi indicando solo la lettera della risposta corretta (A, B o C).")
+    letters = ", ".join(option_keys[:-1]) + f" or {option_keys[-1]}" if len(option_keys) > 1 else option_keys[0]
+    parts.append(f"\nAnswer with only the letter of the correct answer ({letters}).")
     return "\n".join(parts)
 
 
 def extract_answer_letter(response: str, question: dict) -> str:
-    """Try to extract the chosen answer letter (A/B/C) from the LLM response."""
+    """Try to extract the chosen answer letter from the LLM response."""
+    # Build letter class from actual options (e.g. "ABCD" or "ABC")
+    option_keys = sorted(question.get("options", {}).keys())
+    letter_class = "".join(option_keys)  # e.g. "ABCD"
+    lc = f"[{letter_class}]"  # regex character class e.g. "[ABCD]"
+
     # Strip markdown bold/italic markers before matching
     clean = re.sub(r"\*{1,2}", "", response)
     clean = re.sub(r"_{1,2}", "", clean)
     clean_upper = clean.upper().strip()
 
-    # Look for explicit patterns like "La risposta è A", "Risposta: B", etc.
+    # Look for explicit patterns
     patterns = [
-        r"(?:la\s+)?risposta\s+(?:corretta\s+)?(?:è|e'|:)\s*([ABC])\b",
-        r"(?:the\s+)?(?:correct\s+)?answer\s+(?:is|:)\s*([ABC])\b",
-        r"\b([ABC])\s*\)\s*(?:è|e'|is)\s+(?:la\s+)?(?:risposta\s+)?corretta",
-        r"(?:opzione|option)\s+([ABC])\b",
-        r"^([ABC])\s*[\.\)\:]",  # Starts with "A." or "A)" or "A:"
-        r"\b([ABC])\s*$",  # Ends with just a letter
+        rf"(?:the\s+)?(?:correct\s+)?answer\s+(?:is|:)\s*({lc})\b",
+        rf"(?:la\s+)?risposta\s+(?:corretta\s+)?(?:è|e'|:)\s*({lc})\b",
+        rf"\b({lc})\s*\)\s*(?:è|e'|is)\s+(?:la\s+)?(?:risposta\s+)?corretta",
+        rf"(?:opzione|option)\s+({lc})\b",
+        rf"^({lc})\s*[\.\)\:]",  # Starts with "A." or "A)" or "A:"
+        rf"^({lc})\s*$",  # Just a letter on its own line
+        rf"\b({lc})\s*$",  # Ends with just a letter
     ]
 
     for pattern in patterns:
@@ -189,7 +197,7 @@ def extract_answer_letter(response: str, question: dict) -> str:
             return letter
 
     # Last resort: look for standalone letter
-    letters_found = re.findall(r"\b([ABC])\b", clean_upper)
+    letters_found = re.findall(rf"\b({lc})\b", clean_upper)
     if len(letters_found) == 1:
         return letters_found[0]
 
@@ -325,20 +333,24 @@ async def run_benchmark(questions: list[dict], output_path: Path, start: int = 0
 
 
 def load_from_csv(csv_path: Path) -> list[dict]:
-    """Load questions from the pre-filtered logic_questions.csv."""
+    """Load questions from a CSV file. Auto-detects option columns (option_A, option_B, ...)."""
     questions = []
     with open(csv_path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
+        # Detect option columns from header
+        option_cols = sorted([c for c in reader.fieldnames if c.startswith("option_")])
         for row in reader:
+            options = {}
+            for col in option_cols:
+                letter = col.replace("option_", "")
+                val = row.get(col, "").strip()
+                if val:  # only include non-empty options
+                    options[letter] = val
             questions.append({
                 "id": int(row["id"]),
                 "text": row["question"],
-                "options": {
-                    "A": row.get("option_A", ""),
-                    "B": row.get("option_B", ""),
-                    "C": row.get("option_C", ""),
-                },
-                "correct_answer": row["correct_answer"],
+                "options": options,
+                "correct_answer": row["correct_answer"].strip(),
             })
     return questions
 

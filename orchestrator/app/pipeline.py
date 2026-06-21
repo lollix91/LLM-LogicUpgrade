@@ -1,12 +1,13 @@
 """Multi-step reasoning pipeline: LLM extraction → DALI2 logic → LLM synthesis."""
 
 import json
+import re
 import time
 import asyncio
 from pathlib import Path
 
 from app import llm_client, dali2_client
-from app.translator import build_query_event, parse_dali2_result, parse_dali2_logs, validate_program, compile_program
+from app.translator import build_query_event, build_option_eval_event, parse_dali2_result, parse_dali2_logs, validate_program, compile_program
 from app.schemas import build_from_schema, available_schemas
 from app.theories import available_theories
 from app.validator import validate_enhanced, generate_repair_hints
@@ -22,9 +23,10 @@ SYNTHESIS_PROMPT = (_prompts_dir / "synthesis.md").read_text()
 async def run_pipeline(user_message: str, conversation_history: list[dict], skip_logic: bool = False) -> dict:
     """Execute the full neuro-symbolic reasoning pipeline.
 
-    Flow: extract (structured JSON) -> validate connectivity -> DALI2 solve ->
-    self-consistency check (DALI2 result vs LLM expectation). On failure, retry
-    extraction with specific feedback. Finally synthesize the answer.
+    New flow (option evaluation):
+      extract (structured JSON with option_claims) → build combined program →
+      DALI2 evaluates all options → determine answer based on question_type →
+      synthesize response.
 
     If skip_logic=True, bypass the logic engine and respond directly via LLM.
     """
@@ -39,9 +41,10 @@ async def run_pipeline(user_message: str, conversation_history: list[dict], skip
             duration_ms=0,
         ))
         return {"answer": answer, "has_logic": False, "reasoning_trace": trace}
+
     error_feedback = None
     extraction: dict = {}
-    logic_result: dict | None = None
+    determined_answer: str | None = None
 
     for attempt in range(MAX_ATTEMPTS):
         # --- Step 1: Logic Extraction ---
@@ -61,171 +64,239 @@ async def run_pipeline(user_message: str, conversation_history: list[dict], skip
         if not extraction.get("has_logic"):
             break
 
-        # --- Step 1b: Build program from schema (or keep free-form) ---
-        schema = extraction.get("schema")
-        if schema:
-            program, schema_err = build_from_schema(schema, extraction.get("slots", {}))
-            if program is None:
-                error_feedback = schema_err
+        # --- Step 1b: Check for option_claims (new MCQ path) ---
+        if extraction.get("option_claims"):
+            # New architecture: evaluate each option via DALI2
+            t2 = time.time()
+            eval_result = await _evaluate_options(extraction)
+            t3 = time.time()
+            print(f"[TIMING] Attempt {attempt} | Option eval: {t3-t2:.1f}s | valid={eval_result.get('valid_options')}", flush=True)
+
+            trace.append(PipelineStep(
+                step="dali2_option_eval",
+                title="DALI2 Option Evaluation",
+                content=json.dumps(eval_result, indent=2, ensure_ascii=False),
+                duration_ms=round((t3 - t2) * 1000, 1),
+            ))
+
+            determined_answer = _determine_answer(
+                eval_result.get("valid_options", []),
+                extraction.get("question_type", "find_true_conclusion"),
+                list(extraction["option_claims"].keys()),
+            )
+
+            if determined_answer:
+                print(f"[TIMING] Attempt {attempt} | Determined answer: {determined_answer}", flush=True)
+                break
+            else:
+                error_feedback = (
+                    f"Option evaluation inconclusive: valid_options={eval_result.get('valid_options')}. "
+                    f"Ensure exactly ONE option is provable (for find_true/compute_value) or "
+                    f"exactly ONE is unprovable (for find_not_necessarily_true). "
+                    f"Check that facts+rules correctly encode the premises and that "
+                    f"option_claims correctly represent each answer choice."
+                )
                 if attempt < MAX_ATTEMPTS - 1:
                     continue
                 break
-            extraction.update(program)
+        else:
+            # Legacy path: schema-based (for non-MCQ or backward compat)
+            schema = extraction.get("schema")
+            if schema:
+                program, schema_err = build_from_schema(schema, extraction.get("slots", {}))
+                if program is None:
+                    error_feedback = schema_err
+                    if attempt < MAX_ATTEMPTS - 1:
+                        continue
+                    break
+                extraction.update(program)
 
-        # --- Step 1c: Structural validation (connectivity) ---
-        validation = validate_program(extraction)
-        if not validation["valid"]:
-            error_feedback = validation["reason"]
-            # Generate repair hints for more specific feedback
-            hints = generate_repair_hints(validation, extraction)
-            if hints:
-                error_feedback += " HINTS: " + "; ".join(hints)
-            if attempt < MAX_ATTEMPTS - 1:
-                continue
-            break
+            validation = validate_program(extraction)
+            if not validation["valid"]:
+                error_feedback = validation["reason"]
+                hints = generate_repair_hints(validation, extraction)
+                if hints:
+                    error_feedback += " HINTS: " + "; ".join(hints)
+                if attempt < MAX_ATTEMPTS - 1:
+                    continue
+                break
 
-        # --- Step 1d: Enhanced validation (arity, safety, cycles) ---
-        enhanced = validate_enhanced(extraction)
-        if not enhanced["valid"]:
-            error_feedback = enhanced["reason"]
-            hints = enhanced.get("hints", [])
-            if hints:
-                error_feedback += " HINTS: " + "; ".join(hints)
-            if attempt < MAX_ATTEMPTS - 1:
-                continue
-            break
+            enhanced = validate_enhanced(extraction)
+            if not enhanced["valid"]:
+                error_feedback = enhanced["reason"]
+                hints = enhanced.get("hints", [])
+                if hints:
+                    error_feedback += " HINTS: " + "; ".join(hints)
+                if attempt < MAX_ATTEMPTS - 1:
+                    continue
+                break
 
-        # Log validation warnings (if any) in the trace
-        all_warnings = enhanced.get("warnings", [])
-        if all_warnings:
+            # Legacy DALI2 solve
+            t2 = time.time()
+            logic_result = await _solve_with_dali2(extraction)
+            t3 = time.time()
+            print(f"[TIMING] Attempt {attempt} | DALI2 (legacy): {t3-t2:.1f}s | solved={logic_result.get('solved')}", flush=True)
             trace.append(PipelineStep(
-                step="validation_warnings",
-                title="Validation Warnings",
-                content="\n".join(f"⚠ {w}" for w in all_warnings),
-                duration_ms=0,
+                step="dali2_solving",
+                title="DALI2 Logic Engine",
+                content=json.dumps(logic_result, indent=2, ensure_ascii=False),
+                duration_ms=round((t3 - t2) * 1000, 1),
             ))
-
-        # --- Step 2: DALI2 Logic Solving ---
-        t2 = time.time()
-        logic_result = await _solve_with_dali2(extraction)
-        t3 = time.time()
-        print(f"[TIMING] Attempt {attempt} | DALI2: {t3-t2:.1f}s | solved={logic_result.get('solved')}", flush=True)
-
-        trace.append(PipelineStep(
-            step="dali2_solving",
-            title="DALI2 Logic Engine",
-            content=json.dumps(logic_result, indent=2, ensure_ascii=False),
-            duration_ms=round((t3 - t2) * 1000, 1),
-        ))
-
-        # --- Step 2b: Self-consistency check ---
-        # Skip for option_selection: DALI2 trivially confirms whatever goal we set
-        if extraction.get("schema") == "option_selection":
-            logic_result["consistent"] = True
-            print(f"[TIMING] Attempt {attempt} | Consistency: True (option_selection, skip check)", flush=True)
+            if logic_result.get("solved"):
+                determined_answer = str(logic_result.get("solution", ""))
+                break
+            error_feedback = "DALI2 could not solve the query. Check facts and rules connectivity."
+            if attempt < MAX_ATTEMPTS - 1:
+                continue
             break
-
-        consistent, reason = _check_consistency(logic_result, extraction.get("expected_answer"))
-        logic_result["consistent"] = consistent
-        print(f"[TIMING] Attempt {attempt} | Consistency: {consistent} | reason={reason[:80] if reason else 'ok'}", flush=True)
-        if consistent:
-            break
-        error_feedback = reason
-        # otherwise loop and retry (unless out of attempts)
 
     # === Determine response path ===
 
-    # Path 1: Verified logic solution
-    if (extraction.get("has_logic") and logic_result
-            and logic_result.get("consistent")):
+    # Path 1: Logic engine determined an answer
+    if extraction.get("has_logic") and determined_answer:
         t4 = time.time()
         answer = await _synthesize_answer(
-            user_message, extraction, logic_result, conversation_history,
-            verified=True,
+            user_message, extraction, determined_answer, conversation_history,
         )
         t5 = time.time()
         print(f"[TIMING] Synthesis (verified): {t5-t4:.1f}s", flush=True)
         trace.append(PipelineStep(
             step="synthesis",
             title="Final Answer Synthesis",
-            content="Answer generated using verified logical solution.",
+            content=f"Logic engine determined answer: {determined_answer}",
             duration_ms=round((t5 - t4) * 1000, 1),
         ))
         return {"answer": answer, "has_logic": True, "reasoning_trace": trace}
 
-    # Path 2: Elegant degradation — logic detected but engine failed;
-    # use the LLM's own explanation (which is often correct even when
-    # formalisation fails) instead of discarding it.
-    if extraction.get("has_logic") and extraction.get("explanation"):
-        soft_result = {
-            "status": "explanation_fallback",
-            "solved": True,
-            "solution": extraction.get("expected_answer", "unknown"),
-            "explanation": extraction["explanation"],
-        }
-        t4 = time.time()
-        answer = await _synthesize_answer(
-            user_message, extraction, soft_result, conversation_history,
-            verified=False,
-        )
-        t5 = time.time()
-        print(f"[TIMING] Synthesis (fallback): {t5-t4:.1f}s", flush=True)
-        trace.append(PipelineStep(
-            step="synthesis",
-            title="Explanation-Based Synthesis",
-            content=(
-                "Logic engine could not verify the solution. "
-                "Using the extraction's natural-language explanation as basis."
-            ),
-            duration_ms=round((t5 - t4) * 1000, 1),
-        ))
-        return {"answer": answer, "has_logic": True, "reasoning_trace": trace}
-
-    # Path 3: No logic detected → direct LLM response
+    # Path 2: Logic detected but engine could not determine → fall back to direct LLM
     t4 = time.time()
     answer = await _direct_response(user_message, conversation_history)
     t5 = time.time()
-    print(f"[TIMING] Direct response: {t5-t4:.1f}s", flush=True)
+    print(f"[TIMING] Direct response (fallback): {t5-t4:.1f}s", flush=True)
     trace.append(PipelineStep(
         step="direct_response",
-        title="Direct LLM Response",
-        content="No logical reasoning required — responding directly.",
+        title="Direct LLM Response (fallback)",
+        content="Logic engine could not determine answer — responding directly.",
         duration_ms=round((t5 - t4) * 1000, 1),
     ))
     return {"answer": answer, "has_logic": False, "reasoning_trace": trace}
 
 
-def _check_consistency(logic_result: dict, expected) -> tuple[bool, str]:
-    """Compare DALI2's solution against the LLM's expected answer.
+def _determine_answer(valid_options: list, question_type: str, all_keys: list) -> str | None:
+    """Determine the final answer from DALI2's option evaluation results.
 
-    This is the neuro-symbolic verification step: the symbolic engine confirms
-    the neural intuition. Returns (consistent, feedback_for_retry).
+    Args:
+        valid_options: list of option keys that were provable (e.g. ["a", "c"])
+        question_type: the extraction's question_type field
+        all_keys: all option keys (e.g. ["A", "B", "C"])
+
+    Returns the answer key (uppercase) or None if inconclusive.
     """
-    if not logic_result.get("solved"):
-        return False, (
-            "DALI2 could not prove the query. Ensure the query predicate matches a "
-            "rule head, and that every rule-body predicate is a fact or another rule "
-            "head, forming a chain facts -> rules -> query."
-        )
+    # Normalize to uppercase
+    valid_upper = {v.upper() for v in valid_options}
+    all_upper = {k.upper() for k in all_keys}
+    not_valid = all_upper - valid_upper
 
-    solution = str(logic_result.get("solution", "")).strip().lower()
-    exp = str(expected or "").strip().lower()
+    if question_type in ("find_true_conclusion", "compute_value"):
+        # The answer is the provable option
+        if len(valid_upper) == 1:
+            return valid_upper.pop()
+        # Heuristic: if 2 are valid and 1 isn't, might be a "find_not" mislabel
+        # Fall through to heuristic below
 
-    if not exp:
-        return True, ""  # no expectation provided -> accept any proof
+    elif question_type in ("find_not_necessarily_true", "find_false_conclusion"):
+        # The answer is the UNprovable option
+        if len(not_valid) == 1:
+            return not_valid.pop()
+        # Heuristic: if only 1 is valid and 2 aren't, might be a "find_true" mislabel
+        # Fall through to heuristic below
 
-    affirmative = {"yes", "true", "si", "sì", "vero"}
-    if exp in affirmative:
-        return True, ""  # ground query proven true is sufficient
+    # --- Heuristic fallback based on counts ---
+    if question_type in ("find_true_conclusion", "compute_value"):
+        # For "find true": if 2+ are valid, we can't determine uniquely → fail
+        # But if exactly 1 is valid (caught above), return it
+        # If 0 are valid, fail
+        return None
+    elif question_type in ("find_not_necessarily_true", "find_false_conclusion"):
+        # For "find not true": if 2+ are not valid, we can't determine → fail
+        # If exactly 1 is not valid (caught above), return it
+        # If 0 not valid, fail
+        return None
 
-    if exp in solution:
-        return True, ""  # expected binding appears in the solution term
+    # Unknown question_type — try both heuristics
+    if len(valid_upper) == 1:
+        return valid_upper.pop()
+    if len(not_valid) == 1:
+        return not_valid.pop()
 
-    return False, (
-        f"DALI2 derived '{logic_result.get('solution')}' but you expected '{expected}'. "
-        f"Re-examine the modeling: encode the correct common-sense effects so the engine "
-        f"derives the right answer (model all options; let the rules select the valid one)."
-    )
+    return None
+
+
+async def _evaluate_options(extraction: dict) -> dict:
+    """Evaluate all MCQ options against the logical model using DALI2.
+
+    Builds a combined program with option_valid(Key) rules and uses findall
+    to collect which options are provable in a single DALI2 call.
+    """
+    try:
+        event = build_option_eval_event(extraction)
+
+        await dali2_client.inject_event("logic_solver", event)
+        await asyncio.sleep(1.5)
+
+        logs = await dali2_client.get_logs("logic_solver")
+        beliefs = await dali2_client.get_beliefs("logic_solver")
+        result = parse_dali2_result(beliefs)
+
+        if not result["solved"]:
+            result = parse_dali2_logs(logs)
+
+        valid_options = _parse_valid_options(result.get("solution", ""))
+
+        return {
+            "status": "evaluated",
+            "valid_options": valid_options,
+            "raw_solution": result.get("solution", ""),
+            "logs": logs[-15:] if logs else [],
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "valid_options": [],
+            "error": str(e),
+        }
+
+
+def _parse_valid_options(solution_str: str) -> list[str]:
+    """Parse the findall result to extract which options were valid.
+
+    The solution should look like: [a,b] or [a] or [] or valid_options([a,c])
+    """
+    if not solution_str:
+        return []
+
+    s = str(solution_str).strip()
+
+    # Handle wrapper: valid_options([a,b,c])
+    m = re.search(r"valid_options\(\[([^\]]*)\]\)", s)
+    if m:
+        s = f"[{m.group(1)}]"
+
+    # Handle direct list: [a,b,c]
+    m = re.search(r"\[([^\]]*)\]", s)
+    if m:
+        content = m.group(1).strip()
+        if not content:
+            return []
+        items = [x.strip().strip("'\"") for x in content.split(",")]
+        return [x for x in items if x]
+
+    # Handle single atom
+    if s in ("a", "b", "c", "d"):
+        return [s]
+
+    return []
 
 
 async def _extract_logic(user_message: str, error_feedback: str | None = None) -> dict:
@@ -235,8 +306,7 @@ async def _extract_logic(user_message: str, error_feedback: str | None = None) -
         user_content = (
             f"{user_message}\n\n"
             f"[SYSTEM FEEDBACK] Your previous extraction was rejected: {error_feedback}\n"
-            f"Produce a corrected JSON model. Make sure the query is derivable from the "
-            f"facts and rules, and model every option explicitly."
+            f"Produce a corrected JSON model."
         )
     messages = [
         {"role": "system", "content": EXTRACTION_PROMPT},
@@ -270,104 +340,67 @@ async def _extract_logic(user_message: str, error_feedback: str | None = None) -
 
 
 async def _solve_with_dali2(extraction: dict) -> dict:
-    """Step 2: Send logic to DALI2 and get the solution."""
+    """Legacy Step 2: Send logic to DALI2 and get the solution."""
     try:
-        # Build the event to inject
         event = build_query_event(extraction)
-
-        # Inject the solve event into the logic_solver agent
         await dali2_client.inject_event("logic_solver", event)
-
-        # Wait for DALI2 to process (give it a couple cycles)
         await asyncio.sleep(1)
 
-        # Get logs (always available via Redis sync)
         logs = await dali2_client.get_logs("logic_solver")
-
-        # Try beliefs API first (works in non-distributed mode)
         beliefs = await dali2_client.get_beliefs("logic_solver")
         result = parse_dali2_result(beliefs)
 
-        # Fall back to parsing logs (distributed mode: beliefs live in
-        # the agent process, not the server, so the API returns empty)
         if not result["solved"]:
             result = parse_dali2_logs(logs)
 
         if result["solved"]:
-            # Discard stale "query_failed" explanation from previous runs
-            explanation = result.get("explanation")
-            if explanation == "query_failed":
-                explanation = None
             return {
                 "status": "solved",
                 "solved": True,
                 "solution": result["solution"],
                 "bindings": result["bindings"],
-                "explanation": explanation,
                 "logs": logs[-10:] if logs else [],
             }
         else:
-            # Fallback: use the extraction's own explanation
             return {
-                "status": "used_extraction",
+                "status": "failed",
                 "solved": False,
-                "solution": compile_program(extraction)["query"],
-                "explanation": extraction.get("explanation", ""),
                 "logs": logs[-10:] if logs else [],
             }
 
     except Exception as e:
-        # If DALI2 is unavailable, use extraction explanation as fallback
-        return {
-            "status": "fallback",
-            "solution": compile_program(extraction)["query"],
-            "explanation": extraction.get("explanation", "Logic engine unavailable, using LLM extraction."),
-            "error": str(e),
-        }
+        return {"status": "error", "solved": False, "error": str(e)}
 
 
 async def _synthesize_answer(
     user_message: str,
     extraction: dict,
-    logic_result: dict,
+    determined_answer: str,
     history: list[dict],
-    verified: bool = True,
 ) -> str:
-    """Step 3: Generate final answer using the logic solution."""
-    logic_summary = (
-        f"Problem: {extraction.get('explanation', 'N/A')}\n"
-        f"Solution: {logic_result.get('solution', 'N/A')}\n"
-        f"Explanation: {logic_result.get('explanation', 'N/A')}"
-    )
-    if logic_result.get("bindings"):
-        logic_summary += f"\nBindings: {', '.join(logic_result['bindings'])}"
+    """Step 3: Generate final answer using the logic-determined result.
 
-    if verified:
-        header = "The following logical reasoning has been formally verified:"
-    else:
-        header = (
-            "The following reasoning was extracted but could NOT be formally "
-            "verified by the logic engine. Use it as strong guidance but "
-            "apply your own judgment:"
-        )
+    For MCQ (option_claims present), just return the letter directly
+    to avoid the LLM contradicting the logic engine's determination.
+    """
+    if extraction.get("option_claims"):
+        # Direct answer for MCQ — no need for synthesis LLM call
+        return determined_answer
 
-    system_prompt = SYNTHESIS_PROMPT.replace(
-        "The following logical reasoning has been formally verified:", header
-    ).replace("{logic_result}", logic_summary)
+    # For non-MCQ (legacy), use synthesis LLM
+    logic_summary = f"The logic engine has determined the answer is: {determined_answer}"
+    system_prompt = SYNTHESIS_PROMPT.replace("{logic_result}", logic_summary)
 
     messages = [{"role": "system", "content": system_prompt}]
-
-    # Add conversation history (last 10 messages)
     for msg in history[-10:]:
         messages.append({"role": msg["role"], "content": msg["content"]})
-
     messages.append({"role": "user", "content": user_message})
 
-    return await llm_client.chat(messages, temperature=0.7, think=False, max_tokens=1024)
+    return await llm_client.chat(messages, temperature=0.3, think=False, max_tokens=512)
 
 
 async def _direct_response(user_message: str, history: list[dict]) -> str:
-    """Direct LLM response when no logic is detected."""
+    """Direct LLM response when no logic is detected or as fallback."""
     messages = [
         {"role": "system", "content": "You are a helpful assistant. Answer in the same language as the user."},
     ]

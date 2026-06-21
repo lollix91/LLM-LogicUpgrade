@@ -236,6 +236,43 @@ def build_query_event(extraction: dict) -> str:
     return f"solve_logic({facts_list}, {rules_list}, ({prog['query']}))"
 
 
+def build_option_eval_event(extraction: dict) -> str:
+    """Build a solve_logic event that evaluates all MCQ options via findall.
+
+    Adds option_valid(Key) :- <claim> rules for each option, then queries:
+        findall(K, option_valid(K), ValidOptions)
+
+    The solution will be: valid_options([a,b,...]) listing provable options.
+    """
+    facts = extraction.get("facts", []) or []
+    rules = extraction.get("rules", []) or []
+    option_claims = extraction.get("option_claims", {})
+
+    # Compile base facts
+    compiled_facts = [_compile_term(f) for f in facts]
+
+    # Compile base rules
+    compiled_rules = [_compile_rule(r) for r in rules]
+
+    # Add option_valid(key) :- <claim> for each option
+    for key, claim in option_claims.items():
+        key_atom = key.lower().strip()
+        claim_compiled = _compile_term(claim)
+        compiled_rules.append(f"option_valid({key_atom}) :- {claim_compiled}")
+
+    # Build the findall query
+    query = "findall(K, option_valid(K), ValidOptions)"
+
+    # Wrap the result
+    compiled_rules.append("answer(valid_options(V)) :- findall(K, option_valid(K), V)")
+
+    facts_list = "[" + ", ".join(compiled_facts) + "]"
+    rules_list = "[" + ", ".join(f"({r})" for r in compiled_rules) + "]"
+
+    # Use answer(valid_options(V)) as the query — this wraps findall result
+    return f"solve_logic({facts_list}, {rules_list}, (answer(valid_options(ValidOptions))))"
+
+
 def _term_signature(term):
     """Return (pred, arity) signature of a term object; None for non-dict."""
     if not isinstance(term, dict):

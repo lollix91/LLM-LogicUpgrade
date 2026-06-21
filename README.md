@@ -2,66 +2,70 @@
 
 > Augment LLM reasoning with formal logic — powered by DALI2
 
-LLM-LogicUpgrade intercepts user prompts, extracts logical constructs using an LLM, solves them with the DALI2 logic engine (Prolog meta-interpreter), and delivers logically-validated responses.
+LLM-LogicUpgrade demonstrates how a **base LLM** (without "thinking" or chain-of-thought) can improve its logical reasoning capabilities by delegating formal inference to the **DALI2** symbolic logic engine. The LLM acts as a *formalizer* — it translates natural-language problems into structured logic — while DALI2 performs the actual reasoning and determines the correct answer.
 
 ## How It Works
 
-The system uses a **schema-based slot-filling** approach: the LLM never writes Prolog rules. Instead, it identifies a reasoning pattern (schema) and fills in flat data slots. The orchestrator generates correct, connected Prolog programs from those slots — eliminating the entire class of LLM Prolog-syntax errors.
+The system uses an **option evaluation** architecture for multiple-choice questions (MCQ):
+
+1. The LLM extracts facts, rules, and a **testable claim for each answer option** (JSON)
+2. The orchestrator compiles these into a Prolog program with `option_valid(Key) :- Claim` rules
+3. DALI2 evaluates **all options in a single call** via `findall` — determining which are logically provable
+4. The pipeline selects the answer based on the question type (e.g., "find the true conclusion" → the provable option)
 
 ```
-User Prompt
+User Question (MCQ)
     │
     ▼
-[Step 1] LLM picks a reasoning schema and fills slots (JSON)
+[Step 1] LLM formalizes: facts + rules + option_claims (JSON)
     │
     ▼
-[Step 2] Orchestrator builds Prolog from schema + validates connectivity
+[Step 2] Translator builds: option_valid(a) :- claim_a, ... + findall query
     │
     ▼
-[Step 3] DALI2 solves the logic formally
+[Step 3] DALI2 evaluates all options → returns provable set [a, c, ...]
     │
     ▼
-[Step 4] LLM synthesizes final answer with verified logical solution
+[Step 4] Pipeline determines answer from provable/unprovable options
     │
     ▼
-Response + Reasoning Trace → Web UI
+Answer (letter) → Web UI / Benchmark
 ```
 
-### Reasoning Schemas
+### Key Design Principles
 
-| Schema | Pattern | Example |
-|--------|---------|---------|
-| `option_selection` | Which option achieves the goal? | "Walk or drive to the car wash?" |
-| `classification` | Is X a Y? (category hierarchy) | "Tom is a cat. Is Tom an animal?" |
-| `comparison` | Which item is best/worst? | "Route A is 10km, Route B is 25km. Which is shorter?" |
-| `deduction` | If-then, biconditional (iff) | "If and only if it rains, I open my umbrella. Does it rain?" |
-| `composed` | Combine micro-theories | "Mario is Luigi's father, Luigi is Paolo's. Is Mario an ancestor?" |
-| `freeform` | Generic FOL (fallback) | Any first-order logic expressible as facts + rules + query |
+- **LLM does NOT solve the problem** — it only formalizes premises and maps options to logical claims
+- **DALI2 does the actual reasoning** — symbolic inference determines which conclusions follow
+- **No "thinking" mode** — demonstrates that a base LLM + symbolic logic outperforms the LLM alone
+- **Single DALI2 call per question** — all options tested simultaneously via `findall`
+- **Graceful fallback** — if DALI2 can't determine the answer, falls back to pure LLM
 
-### Composable Micro-Theories
+### Question Types
 
-The `composed` schema allows combining specialized reasoning modules:
+| Type | Logic | Answer Selection |
+|------|-------|------------------|
+| `find_true_conclusion` | Which option follows from premises? | The unique provable option |
+| `find_not_necessarily_true` | Which option does NOT follow? | The unique unprovable option |
+| `find_false_conclusion` | Which option contradicts premises? | The unique unprovable option |
+| `compute_value` | Arithmetic/calculation | The option whose value matches |
 
-| Theory | Handles |
-|--------|---------|
-| `transitive_closure` | Hierarchies, ancestry, reachability |
-| `disjunctive_exclusion` | "Either A or B. Not A → B" |
-| `arithmetic_compare` | Numeric max/min with real values |
-| `counting` | "How many X satisfy Y?" |
-| `temporal_ordering` | Before/after with transitivity |
-| `modus_tollens` | Contraposition: A→B, ¬B ⊢ ¬A |
-| `set_membership` | "All/some/none of X have Y" |
-| `constraint_assignment` | Puzzle-like assignments |
-| `causal_chain` | Cause→effect propagation |
-| `default_exception` | "Birds fly, penguins don't" |
-| `spatial_reasoning` | Left/right/above/below + transitivity |
-| `planning` | STRIPS-like action selection |
+### Extended IR (Intermediate Representation)
 
-Each schema/theory generates fixed Prolog rules that are correct and connected by construction. The LLM only provides flat facts (slot values).
+The LLM outputs a structured JSON that supports:
 
-### Elegant Degradation
+| Construct | JSON IR | Prolog |
+|-----------|---------|--------|
+| Negation | `{"not": <term>}` | `\+(Goal)` |
+| Disjunction | `{"or": [<terms>]}` | `(A ; B)` |
+| Conjunction | `{"and": [<terms>]}` | `(A , B)` |
+| Arithmetic | `{"pred": "is", "args": ["X", "A+B"]}` | `X is A+B` |
+| Findall | `{"findall": T, "goal": G, "bag": V}` | `findall(T, G, V)` |
+| Forall | `{"forall": C, "action": A}` | `forall(C, A)` |
+| Aggregates | `{"aggregate": "count", ...}` | `findall + length` |
 
-If DALI2 cannot verify the solution (e.g., schema mismatch, engine timeout), the system falls back to the LLM's natural-language explanation rather than discarding it. The response is marked as unverified.
+### Graceful Degradation
+
+If DALI2 cannot determine a unique answer (ambiguous evaluation, formalization error, or engine failure), the system falls back to a direct LLM response rather than returning an incorrect answer.
 
 ## Quick Start
 
@@ -194,15 +198,15 @@ The model can also be changed at runtime from the Web UI settings panel.
 
 ### Pipeline Components
 
-- **`orchestrator/app/schemas.py`** — Reasoning schema definitions (option_selection, classification, comparison, deduction, freeform, composed)
-- **`orchestrator/app/theories.py`** — Composable micro-theory library (12 theories: transitive_closure, disjunctive_exclusion, arithmetic_compare, etc.)
-- **`orchestrator/app/translator.py`** — Extended JSON-to-Prolog compiler (supports negation, disjunction, arithmetic, findall, forall, aggregates)
-- **`orchestrator/app/validator.py`** — Enhanced static analysis: arity consistency, variable safety, cycle detection, repair hints
-- **`orchestrator/app/pipeline.py`** — Multi-step orchestration: extraction → schema build → validation → DALI2 solve → consistency check → synthesis
-- **`orchestrator/app/llm_client.py`** — Dual-backend LLM client (Ollama local / OpenRouter cloud)
-- **`orchestrator/app/prompts/extraction.md`** — LLM prompt for schema/theory selection and slot-filling (15 examples)
-- **`orchestrator/app/prompts/synthesis.md`** — LLM prompt for answer synthesis with logic result
-- **`dali2-agents/logic_solver.pl`** — DALI2 agent with extended meta-interpreter (SLD + arithmetic + lists + findall + forall + if-then-else)
+- **`orchestrator/app/pipeline.py`** — Core orchestration: extraction → option evaluation via DALI2 → answer determination. Includes retry with error feedback (up to 3 attempts).
+- **`orchestrator/app/translator.py`** — JSON IR to Prolog compiler + `build_option_eval_event()` for MCQ evaluation. Supports negation, disjunction, arithmetic, findall, forall, aggregates.
+- **`orchestrator/app/validator.py`** — Static analysis: arity consistency, variable safety, cycle detection, repair hints.
+- **`orchestrator/app/llm_client.py`** — Dual-backend LLM client (Ollama local / OpenRouter cloud). Thinking mode disabled.
+- **`orchestrator/app/prompts/extraction.md`** — Formalizer prompt with 16 worked examples covering syllogisms, contrapositives, quantifiers, arithmetic, ordering, biconditionals, "only if", double negation.
+- **`orchestrator/app/prompts/synthesis.md`** — Minimal synthesis prompt (MCQ answers bypass this entirely).
+- **`orchestrator/app/schemas.py`** — Legacy reasoning schemas (backward compatibility for non-MCQ use).
+- **`orchestrator/app/theories.py`** — Composable micro-theory library (12 theories).
+- **`dali2-agents/logic_solver.pl`** — DALI2 agent with extended meta-interpreter (SLD + arithmetic + lists + findall + forall + if-then-else + type checks).
 
 ### API Endpoints
 
@@ -221,37 +225,51 @@ Full API docs at `http://localhost:8000/docs` (Swagger UI).
 
 A benchmark suite compares **LLM+DALI2** (full neuro-symbolic pipeline) against **pure LLM** (no logic engine) on standardized logic questions.
 
-### Build the dataset
+### Datasets
 
-```bash
-python benchmark/build_logic_dataset.py
-```
+| File | Language | Options | Questions |
+|------|----------|---------|-----------|
+| `benchmark/logic_questions_en.csv` | English | A/B/C/D | ~7400 |
+| `benchmark/logic_questions_it.csv` | Italian | A/B/C | ~370 |
 
-Filters ~370 logic-relevant questions (syllogisms, conditionals, ordering, negation, arithmetic) from the full 1500-question bank, excluding vocabulary, reading comprehension, and visual questions.
+The script **auto-detects** the number of options from the CSV header (supports any number of `option_X` columns).
 
 ### Run the benchmark
 
 ```bash
-# Full benchmark
+# English benchmark (default)
 python benchmark/run_benchmark.py
+
+# Italian benchmark
+python benchmark/run_benchmark.py --questions benchmark/logic_questions_it.csv
 
 # Limit to N questions
 python benchmark/run_benchmark.py --limit 50
 
 # Start from question ID
-python benchmark/run_benchmark.py --start 100 --limit 20
+python benchmark/run_benchmark.py --start 10 --limit 20
 
-# Custom output
+# Custom output path
 python benchmark/run_benchmark.py --output benchmark/my_results.csv
+
+# Combine options
+python benchmark/run_benchmark.py --questions benchmark/logic_questions_en.csv --limit 100 --output benchmark/en_100.csv
 ```
 
-For each question the benchmark sends two requests to the orchestrator:
-1. `skip_logic=False` — full pipeline (LLM extraction → DALI2 → synthesis)
+### Requirements
+
+- Docker services must be running (`start.bat` or `start.sh`)
+- The orchestrator must be accessible at `http://localhost:8000`
+
+### How it works
+
+For each question the benchmark sends **two requests** to the orchestrator:
+1. `skip_logic=False` — full pipeline (LLM formalization → DALI2 evaluation → answer)
 2. `skip_logic=True` — direct LLM response (no logic engine)
 
 Output CSV columns: `question_id`, `question`, `expected_answer`, `llm_dali2_answer`, `pure_llm_answer`.
 
-A summary with accuracy percentages for both modes is printed at the end.
+A summary with accuracy percentages and the delta between both modes is printed at the end.
 
 ## License
 
