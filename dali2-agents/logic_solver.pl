@@ -26,13 +26,17 @@ solve_logicE(Facts, Rules, Query) :>
     helper(clear_state),
     do(solve(Facts, Rules, Query)).
 
-%% Clear all stale beliefs before a new solve
+%% Clear all stale beliefs before a new solve.
+%% Uses retractall/1 directly on the local Prolog DB to guarantee ALL
+%% matching beliefs are removed atomically — bypassing the believes/retract_belief
+%% DSL layer, which only removes one belief per call and may not see
+%% in-flight retractions within the same action cycle.
 helper(clear_state) :-
-    ( believes(solution(_)) -> retract_belief(solution(_)), helper(clear_state) ; true ),
-    ( believes(result_binding(_)) -> retract_belief(result_binding(_)), helper(clear_state) ; true ),
-    ( believes(logic_explanation(_)) -> retract_belief(logic_explanation(_)), helper(clear_state) ; true ),
-    ( believes(kb_fact(_)) -> retract_belief(kb_fact(_)), helper(clear_state) ; true ),
-    ( believes(kb_rule(_)) -> retract_belief(kb_rule(_)), helper(clear_state) ; true ).
+    retractall(agent_belief_rt(solution(_))),
+    retractall(agent_belief_rt(result_binding(_))),
+    retractall(agent_belief_rt(logic_explanation(_))),
+    retractall(agent_belief_rt(kb_fact(_))),
+    retractall(agent_belief_rt(kb_rule(_))).
 
 %% --- Action: Solve the logical problem ---
 

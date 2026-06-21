@@ -197,7 +197,7 @@ def _determine_answer(valid_options: list, question_type: str, all_keys: list) -
     all_upper = {k.upper() for k in all_keys}
     not_valid = all_upper - valid_upper
 
-    if question_type in ("find_true_conclusion", "compute_value"):
+    if question_type in ("find_true_conclusion", "compute_value", "find_same_mistake", "find_argument_loophole"):
         # The answer is the provable option
         if len(valid_upper) == 1:
             return valid_upper.pop()
@@ -212,7 +212,7 @@ def _determine_answer(valid_options: list, question_type: str, all_keys: list) -
         # Fall through to heuristic below
 
     # --- Heuristic fallback based on counts ---
-    if question_type in ("find_true_conclusion", "compute_value"):
+    if question_type in ("find_true_conclusion", "compute_value", "find_same_mistake", "find_argument_loophole"):
         # For "find true": if 2+ are valid, we can't determine uniquely → fail
         # But if exactly 1 is valid (caught above), return it
         # If 0 are valid, fail

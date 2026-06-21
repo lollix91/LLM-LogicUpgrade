@@ -31,6 +31,18 @@ If logic IS needed (multiple-choice question):
 }
 ```
 
+If logic IS needed (open-ended question — **no** A/B/C options in the question):
+```json
+{
+  "has_logic": true,
+  "question_type": "compute_answer",
+  "facts": [<fact>, ...],
+  "rules": [<rule>, ...],
+  "query": <term with a variable that DALI2 will bind to the result>
+}
+```
+**CRITICAL: For `compute_answer`, use `query` instead of `option_claims`. Do NOT invent A/B/C options that aren’t in the original question.**
+
 ---
 
 ## Question Types
@@ -38,7 +50,10 @@ If logic IS needed (multiple-choice question):
 - `"find_true_conclusion"` — "Which is true?", "Which follows?", "Which is correct?"
 - `"find_not_necessarily_true"` — "Which CANNOT be concluded?", "Which is NOT necessarily true?", "Which is NOT correct?"
 - `"find_false_conclusion"` — "Which is false?", "Which is incorrect?"
-- `"compute_value"` — "How much?", "How many?", "What is the value?"
+- `"compute_value"` — "How much?", "How many?", "What is the value?" **when the question provides explicit A/B/C answer options**
+- `"compute_answer"` — Same computation questions but **with NO explicit answer options** in the text (open-ended). Use `query` instead of `option_claims`.
+- `"find_same_mistake"` — "Which makes the same logical mistake?", "Which has the same logical flaw?", "Which commits the same error in reasoning?"
+- `"find_argument_loophole"` — "Which best illustrates the loophole/weakness in the argument?", "Which most weakens the argument?", "Which identifies the assumption gap?", "Which most seriously challenges the argument?"
 
 ---
 
@@ -465,7 +480,130 @@ Engine: Only A derivable (biconditional contrapositive). Answer: A.
 
 Engine: 1*3600/9 = 400 seconds = 6min 40sec. A matches. Answer: A.
 
-### Example 16 — No logic needed
+### Example 16 — Logical fallacy analogy (find_same_mistake)
+
+**Q:** "The argument above: 'You're a patriot, so your words are good; since my words are good too, I must be a patriot.' Which option makes the same logical mistake? A) If it rains, the ground is wet. The ground is wet, so it rained. B) All birds can fly. Penguins are birds, so penguins can fly. C) Exercise is healthy, therefore healthy people exercise. D) I saw smoke so there must be fire."
+
+The premise commits **circular reasoning** (begging the question / petitio principii): the conclusion is embedded in or loops back to the premises.
+
+Analyze each option:
+- A commits **affirming the consequent** (if P→Q and Q, conclude P — a different fallacy)
+- B commits **false universal** / **hasty generalization** (different fallacy)
+- C commits **circular reasoning** (same fallacy — 'healthy→exercise' is used to conclude 'exercise→healthy', circular)
+- D commits **post hoc / abductive inference** (different fallacy)
+
+**Encoding strategy for find_same_mistake:**
+1. Identify the premise's fallacy and assert it as a fact.
+2. Identify each option's fallacy and assert it as a fact.
+3. A rule matches options whose fallacy equals the premise's fallacy.
+4. option_claims test which option matches.
+
+```json
+{
+  "has_logic": true,
+  "question_type": "find_same_mistake",
+  "facts": [
+    {"pred": "premise_fallacy", "args": ["circular_reasoning"]},
+    {"pred": "option_fallacy", "args": ["a", "affirming_consequent"]},
+    {"pred": "option_fallacy", "args": ["b", "hasty_generalization"]},
+    {"pred": "option_fallacy", "args": ["c", "circular_reasoning"]},
+    {"pred": "option_fallacy", "args": ["d", "post_hoc"]}
+  ],
+  "rules": [
+    {"head": {"pred": "same_mistake", "args": ["X"]}, "body": [
+      {"pred": "premise_fallacy", "args": ["M"]},
+      {"pred": "option_fallacy", "args": ["X", "M"]}
+    ]}
+  ],
+  "option_claims": {
+    "A": {"pred": "same_mistake", "args": ["a"]},
+    "B": {"pred": "same_mistake", "args": ["b"]},
+    "C": {"pred": "same_mistake", "args": ["c"]},
+    "D": {"pred": "same_mistake", "args": ["d"]}
+  }
+}
+```
+
+Engine: only C's `option_fallacy` matches `premise_fallacy`. Answer: C.
+
+**CRITICAL for find_same_mistake:** The atom you use for the fallacy name MUST be IDENTICAL in both `premise_fallacy` and the matching `option_fallacy` fact. This is the only way DALI2 can prove the match.
+
+### Example 17 — Argument loophole / weakness (find_argument_loophole)
+
+**Q:** "A study found that employees who voluntarily joined company wellness programs reported less stress. Therefore, all companies should implement wellness programs to reduce employee stress. Which best illustrates the loophole in this argument? A) Wellness programs are expensive for small companies B) Employees who volunteered may already be more health-conscious than average, making the sample non-representative C) Stress affects people differently D) Some wellness activities are more effective than others"
+
+The argument's loophole: the conclusion generalizes from a **specific, possibly non-representative sample** (volunteer participants) to **all employees**. This is a hasty generalization / biased sample flaw.
+
+Analyse each option against the loophole:
+- A: points to economic cost — a practical concern, NOT the logical gap
+- B: points to non-representative sample — directly illustrates the loophole
+- C: points to individual variability in stress response — a different concern
+- D: points to variability in program effectiveness — a different concern
+
+**Encoding strategy for find_argument_loophole:**
+1. Identify the argument's main logical flaw/assumption gap and assign it a snake_case atom.
+2. For EACH option, identify what concern it raises and assign a snake_case atom.
+3. Only the option whose atom MATCHES the argument's flaw atom is the answer.
+4. The rule and option_claims follow the same pattern as find_same_mistake.
+
+```json
+{
+  "has_logic": true,
+  "question_type": "find_argument_loophole",
+  "facts": [
+    {"pred": "argument_flaw", "args": ["non_representative_sample"]},
+    {"pred": "option_targets", "args": ["a", "economic_cost"]},
+    {"pred": "option_targets", "args": ["b", "non_representative_sample"]},
+    {"pred": "option_targets", "args": ["c", "individual_variability"]},
+    {"pred": "option_targets", "args": ["d", "effectiveness_variability"]}
+  ],
+  "rules": [
+    {"head": {"pred": "illustrates_loophole", "args": ["X"]}, "body": [
+      {"pred": "argument_flaw", "args": ["F"]},
+      {"pred": "option_targets", "args": ["X", "F"]}
+    ]}
+  ],
+  "option_claims": {
+    "A": {"pred": "illustrates_loophole", "args": ["a"]},
+    "B": {"pred": "illustrates_loophole", "args": ["b"]},
+    "C": {"pred": "illustrates_loophole", "args": ["c"]},
+    "D": {"pred": "illustrates_loophole", "args": ["d"]}
+  }
+}
+```
+
+Engine: only B's `option_targets` matches `argument_flaw`. Answer: B.
+
+**CRITICAL for find_argument_loophole:** You MUST identify the specific logical gap yourself and encode the result as CONCRETE FACTS. The atom assigned to `argument_flaw` must be IDENTICAL to the atom assigned to the matching `option_targets` fact. Assign DIFFERENT atoms to all other options. NEVER use abstract predicates with no matching facts.
+
+### Example 18 — Open-ended computation (compute_answer)
+
+**Q:** "Marco has three apples. He eats 4 of his apples. How many apples does Marco have now?"
+
+This question has **no A/B/C options** — it asks for a direct answer. Use `compute_answer` with a `query` field. Do NOT invent options.
+
+```json
+{
+  "has_logic": true,
+  "question_type": "compute_answer",
+  "facts": [
+    {"pred": "initial_apples", "args": [3]},
+    {"pred": "eaten_apples", "args": [4]}
+  ],
+  "rules": [
+    {"head": {"pred": "final_apples", "args": ["X"]}, "body": [
+      {"pred": "initial_apples", "args": ["I"]},
+      {"pred": "eaten_apples", "args": ["E"]},
+      {"pred": "is", "args": ["X", "I - E"]}
+    ]}
+  ],
+  "query": {"pred": "final_apples", "args": ["Answer"]}
+}
+```
+
+Engine binds Answer = −1. Solution: `final_apples(-1)`. The synthesis step presents this as a natural language answer ("-1 apples" or notes the impossibility).
+
+### Example 19 — No logic needed
 
 **Q:** "What's the weather like today?"
 
@@ -489,4 +627,7 @@ Engine: 1*3600/9 = 400 seconds = 6min 40sec. A matches. Answer: A.
 10. **For conditionals:** P→Q gives: contrapositive ¬Q→¬P (valid), inverse ¬P→¬Q (INVALID), converse Q→P (INVALID).
 11. **"Only if":** "P only if Q" means P→Q (not Q→P).
 12. **"If and only if":** P↔Q means both P→Q and Q→P are valid.
-13. Output ONLY the JSON object. No prose, no code fences, no explanation text.
+13. **For find_same_mistake:** You MUST analyse each option's fallacy yourself and encode the result as CONCRETE FACTS (`premise_fallacy`, `option_fallacy`). NEVER create abstract rules whose body predicates have no matching facts — they will never be proven. The fallacy name atom must be identical across `premise_fallacy` and the matching `option_fallacy` fact.
+14. **For find_argument_loophole:** Identify the argument's specific logical gap/assumption failure and assign it a snake_case atom in `argument_flaw`. For each option, decide what concern it raises and assign a snake_case atom in `option_targets`. Only the option that directly addresses the same gap as `argument_flaw` gets the SAME atom. This is the only way DALI2 can find the answer. NEVER reuse the same atom for multiple options.
+16. **For compute_answer (open-ended):** Use `query` instead of `option_claims`. The `query` must include a variable (uppercase) that DALI2 will bind to the numeric or symbolic result. NEVER invent A/B/C options that aren’t in the original question.
+17. Output ONLY the JSON object. No prose, no code fences, no explanation text.
