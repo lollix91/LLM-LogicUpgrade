@@ -64,8 +64,9 @@ helper(assert_rules([Rule|Rest])) :-
 %% Evaluate query: commit to the FIRST solution (which binds query
 %% variables), then store it. Backtracking happens INSIDE solve/2 to
 %% explore all facts and rules; the if-then here just takes one answer.
+%% Depth limit of 20 prevents exponential blowup from malformed rules.
 helper(evaluate_query(Query)) :-
-    ( helper(solve(Query, 40)) ->
+    ( helper(solve(Query, 20)) ->
         log("=== SOLUTION FOUND: ~w ===", [Query]),
         assert_belief(solution(Query)),
         log("Logic solving complete.")
@@ -176,6 +177,12 @@ helper(solve(sumlist(L, S), _)) :- sumlist(L, S).
 helper(solve(max_list(L, M), _)) :- max_list(L, M).
 helper(solve(min_list(L, M), _)) :- min_list(L, M).
 
+%% --- Integer enumeration (for generate-and-test) ---
+helper(solve(between(L, H, X), _)) :- between(L, H, X).
+helper(solve(succ(X, Y), _)) :- succ(X, Y).
+helper(solve(plus(X, Y, Z), _)) :- plus(X, Y, Z).
+helper(solve(abs(X, Y), _)) :- Y is abs(X).
+
 %% --- Type checks ---
 helper(solve(number(X), _)) :- number(X).
 helper(solve(atom(X), _)) :- atom(X).
@@ -225,6 +232,10 @@ helper(solve(Goal, D)) :-
     Goal \= var(_),
     Goal \= nonvar(_),
     Goal \= ground(_),
+    Goal \= between(_, _, _),
+    Goal \= succ(_, _),
+    Goal \= plus(_, _, _),
+    Goal \= abs(_, _),
     D > 0,
     D1 is D - 1,
     ( believes(kb_fact(Goal))

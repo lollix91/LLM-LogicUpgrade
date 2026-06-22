@@ -66,6 +66,39 @@ async def run_pipeline(user_message: str, conversation_history: list[dict], skip
 
         # --- Step 1b: Check for option_claims (new MCQ path) ---
         if extraction.get("option_claims"):
+            # Validate the program before sending to DALI2
+            validation = validate_program(extraction)
+            if not validation["valid"]:
+                error_feedback = validation["reason"]
+                hints = generate_repair_hints(validation, extraction)
+                if hints:
+                    error_feedback += " HINTS: " + "; ".join(hints)
+                trace.append(PipelineStep(
+                    step="validation",
+                    title="Program Validation (failed)",
+                    content=error_feedback,
+                    duration_ms=0,
+                ))
+                if attempt < MAX_ATTEMPTS - 1:
+                    continue
+                break
+
+            enhanced = validate_enhanced(extraction)
+            if not enhanced["valid"]:
+                error_feedback = enhanced["reason"]
+                hints = enhanced.get("hints", [])
+                if hints:
+                    error_feedback += " HINTS: " + "; ".join(hints)
+                trace.append(PipelineStep(
+                    step="validation",
+                    title="Enhanced Validation (failed)",
+                    content=error_feedback,
+                    duration_ms=0,
+                ))
+                if attempt < MAX_ATTEMPTS - 1:
+                    continue
+                break
+
             # New architecture: evaluate each option via DALI2
             t2 = time.time()
             eval_result = await _evaluate_options(extraction)
@@ -242,7 +275,7 @@ async def _evaluate_options(extraction: dict) -> dict:
         event = build_option_eval_event(extraction)
 
         await dali2_client.inject_event("logic_solver", event)
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(3.0)
 
         logs = await dali2_client.get_logs("logic_solver")
         beliefs = await dali2_client.get_beliefs("logic_solver")
@@ -257,7 +290,7 @@ async def _evaluate_options(extraction: dict) -> dict:
             "status": "evaluated",
             "valid_options": valid_options,
             "raw_solution": result.get("solution", ""),
-            "logs": logs[-15:] if logs else [],
+            "logs": logs[-30:] if logs else [],
         }
 
     except Exception as e:

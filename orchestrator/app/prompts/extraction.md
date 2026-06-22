@@ -611,6 +611,382 @@ Engine binds Answer = −1. Solution: `final_apples(-1)`. The synthesis step pre
 {"has_logic": false}
 ```
 
+### Example 20 — Combinatorial constraint problem (find_true_conclusion)
+
+**Q:** "6 people A, B, C, D, E, F participated in a final game. Before the match, there were 3 guesses. First, the champion is either A or B. Second, the champion is C or D. Third, D, E, F can never be the champion. Only one of the three was correct after the match. So who is the champion? A) A B) B C) C D) D"
+
+This is a constraint-satisfaction problem. We enumerate all possible champions and check which one makes exactly one guess correct.
+
+```json
+{
+  "has_logic": true,
+  "question_type": "find_true_conclusion",
+  "facts": [
+    {"pred": "person", "args": ["a"]},
+    {"pred": "person", "args": ["b"]},
+    {"pred": "person", "args": ["c"]},
+    {"pred": "person", "args": ["d"]},
+    {"pred": "person", "args": ["e"]},
+    {"pred": "person", "args": ["f"]}
+  ],
+  "rules": [
+    {"head": {"pred": "guess1_correct", "args": ["Ch"]}, "body": [{"pred": "member", "args": ["Ch", ["a", "b"]]}]},
+    {"head": {"pred": "guess2_correct", "args": ["Ch"]}, "body": [{"pred": "member", "args": ["Ch", ["c", "d"]]}]},
+    {"head": {"pred": "guess3_correct", "args": ["Ch"]}, "body": [{"pred": "member", "args": ["Ch", ["a", "b", "c"]]}]},
+    {"head": {"pred": "exactly_one_correct", "args": ["Ch"]}, "body": [
+      {"pred": "person", "args": ["Ch"]},
+      {"pred": "guess1_correct", "args": ["Ch"]},
+      {"pred": "not", "args": [{"pred": "guess2_correct", "args": ["Ch"]}]},
+      {"pred": "not", "args": [{"pred": "guess3_correct", "args": ["Ch"]}]}
+    ]},
+    {"head": {"pred": "exactly_one_correct", "args": ["Ch"]}, "body": [
+      {"pred": "person", "args": ["Ch"]},
+      {"pred": "not", "args": [{"pred": "guess1_correct", "args": ["Ch"]}]},
+      {"pred": "guess2_correct", "args": ["Ch"]},
+      {"pred": "not", "args": [{"pred": "guess3_correct", "args": ["Ch"]}]}
+    ]},
+    {"head": {"pred": "exactly_one_correct", "args": ["Ch"]}, "body": [
+      {"pred": "person", "args": ["Ch"]},
+      {"pred": "not", "args": [{"pred": "guess1_correct", "args": ["Ch"]}]},
+      {"pred": "not", "args": [{"pred": "guess2_correct", "args": ["Ch"]}]},
+      {"pred": "guess3_correct", "args": ["Ch"]}
+    ]}
+  ],
+  "option_claims": {
+    "A": {"pred": "exactly_one_correct", "args": ["a"]},
+    "B": {"pred": "exactly_one_correct", "args": ["b"]},
+    "C": {"pred": "exactly_one_correct", "args": ["c"]},
+    "D": {"pred": "exactly_one_correct", "args": ["d"]}
+  }
+}
+```
+
+Engine: For champion=D: guess1 fails (D not in [a,b]), guess2 succeeds (D in [c,d]), guess3 fails (D not in [a,b,c]). Exactly one correct. Answer: D.
+
+### Example 21 — Strengthen/weaken argument (has_logic: false)
+
+**Q:** "Last year's inflation rate was 1.2%, and this year has reached 4%, so we can conclude that the inflation rate is on the rise. Which of the following, if true, would seriously weaken the above conclusion?"
+
+This requires evaluating real-world plausibility of alternative explanations — not formal logical derivation. The engine cannot assess whether a fact "weakens" a causal claim.
+
+```json
+{"has_logic": false}
+```
+
+### Example 22 — Definition matching (has_logic: false)
+
+**Q:** "Sensation: refers to the human brain's reflection of individual attributes of objective things directly acting on sensory organs. Which of the following belongs to sensation: A) ... B) ... C) ... D) ..."
+
+This requires natural language understanding to match scenarios against a verbose definition — not formal logic.
+
+```json
+{"has_logic": false}
+```
+
+### Example 23 — Find presupposed premise (has_logic: false)
+
+**Q:** "A linguist believes that the term 'fiancée' is contradictory... Which of the following is the presupposed premise of the linguist?"
+
+Finding implicit assumptions that are NOT logically deducible requires abductive reasoning about what's missing from an argument. This is NOT the same as "which can guarantee" (see Example 25).
+
+```json
+{"has_logic": false}
+```
+
+### Example 24 — Multi-step contrapositive chain (find_true_conclusion)
+
+**Q:** "If Xiao Zhang goes to Xinjiang this summer, he must visit Turpan and Kanas; only if he travels with Xiao Li, Xiao Zhang will travel to Turpan or Tianchi; if he travels with Xiao Li, Xiao Zhang must make an appointment with Xiao Li; if Xiao Zhang and Xiao Li make an appointment, then Xiao Li must have time this summer. Xiao Li's unit came to an emergency mission and related personnel must not ask for leave. What can be deduced? A) Xiao Zhang did not go to Xinjiang B) Xiao Zhang goes to Kanas C) Xiao Zhang goes to Tianchi D) Xiao Zhang goes to Turpan"
+
+Logic chain: go_xinjiang → visit_turpan ∧ visit_kanas → travel_with_xiaoli → make_appointment → xiaoli_free. But xiaoli not free. Contrapositive: ¬xiaoli_free → ¬make_appointment → ¬travel_with_xiaoli → ¬visit_turpan → ¬go_xinjiang.
+
+```json
+{
+  "has_logic": true,
+  "question_type": "find_true_conclusion",
+  "facts": [
+    {"pred": "not_free", "args": ["xiaoli"]}
+  ],
+  "rules": [
+    {"head": {"pred": "go_xinjiang_implies", "args": ["visit_turpan"]}, "body": [{"pred": "go_xinjiang", "args": []}]},
+    {"head": {"pred": "turpan_requires_travel_with", "args": ["xiaoli"]}, "body": [{"pred": "visit_turpan", "args": []}]},
+    {"head": {"pred": "travel_requires_appointment", "args": ["xiaoli"]}, "body": [{"pred": "travel_with", "args": ["xiaoli"]}]},
+    {"head": {"pred": "appointment_requires_free", "args": ["xiaoli"]}, "body": [{"pred": "make_appointment", "args": ["xiaoli"]}]},
+    {"head": {"pred": "deduced_not_go_xinjiang", "args": []}, "body": [{"pred": "not_free", "args": ["xiaoli"]}]},
+    {"head": {"pred": "deduced_not_go_xinjiang", "args": []}, "body": [
+      {"pred": "not", "args": [{"pred": "xiaoli_free", "args": ["xiaoli"]}]}
+    ]}
+  ],
+  "option_claims": {
+    "A": {"pred": "deduced_not_go_xinjiang", "args": []},
+    "B": {"pred": "visit_kanas", "args": []},
+    "C": {"pred": "visit_tianchi", "args": []},
+    "D": {"pred": "visit_turpan", "args": []}
+  }
+}
+```
+
+Engine: From not_free(xiaoli), deduced_not_go_xinjiang succeeds. B/C/D cannot be proven. Answer: A.
+
+### Example 25 — Which can guarantee the argument (find_true_conclusion)
+
+**Q:** "Some Cantonese don't like chili, so some southerners don't like chili. Which of the following can guarantee the above argument? A) Some Cantonese love chili B) Some people who like peppers are southerners C) All Cantonese are southerners D) Some Cantonese like neither peppers nor sweets"
+
+This IS formally deducible. The argument has a missing link: Cantonese → Southerner. Encode each option as a "bridge" rule. The correct option provides a real bridge (body references existing facts); wrong options get `:- fail` (always fails, but passes validation since `fail` is a builtin).
+
+```json
+{
+  "has_logic": true,
+  "question_type": "find_true_conclusion",
+  "facts": [
+    {"pred": "cantonese", "args": ["c1"]},
+    {"pred": "not_like_chili", "args": ["c1"]}
+  ],
+  "rules": [
+    {"head": {"pred": "bridge_a", "args": ["X"]}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_a_valid", "args": []}, "body": [
+      {"pred": "bridge_a", "args": ["X"]},
+      {"pred": "not_like_chili", "args": ["X"]}
+    ]},
+    {"head": {"pred": "bridge_b", "args": ["X"]}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_b_valid", "args": []}, "body": [
+      {"pred": "bridge_b", "args": ["X"]},
+      {"pred": "not_like_chili", "args": ["X"]}
+    ]},
+    {"head": {"pred": "bridge_c", "args": ["X"]}, "body": [{"pred": "cantonese", "args": ["X"]}]},
+    {"head": {"pred": "option_c_valid", "args": []}, "body": [
+      {"pred": "bridge_c", "args": ["X"]},
+      {"pred": "not_like_chili", "args": ["X"]}
+    ]},
+    {"head": {"pred": "bridge_d", "args": ["X"]}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_d_valid", "args": []}, "body": [
+      {"pred": "bridge_d", "args": ["X"]},
+      {"pred": "not_like_chili", "args": ["X"]}
+    ]}
+  ],
+  "option_claims": {
+    "A": {"pred": "option_a_valid", "args": []},
+    "B": {"pred": "option_b_valid", "args": []},
+    "C": {"pred": "option_c_valid", "args": []},
+    "D": {"pred": "option_d_valid", "args": []}
+  }
+}
+```
+
+Engine: `bridge_c(c1)` succeeds via `cantonese(c1)` (fact). `not_like_chili(c1)` (fact). So `option_c_valid` succeeds. Options A/B/D: `bridge_a/b/d(X) :- fail` → always fails. Answer: C.
+
+**Key insight:** For "which can guarantee" questions: (1) identify the missing logical link in the argument, (2) encode each option as a bridge rule — correct option gets a real bridge referencing existing facts, wrong options get `:- fail`, (3) each option's valid rule tests bridge + conclusion conditions. DALI2 verifies which bridge actually leads to the conclusion.
+
+### Example 26 — Simple syllogism (find_true_conclusion)
+
+**Q:** "Li Lin is a civil servant, but not a college graduate. Which of the following is necessarily true? A) Not all university graduates are civil servants B) Civil servants are not all college graduates C) Some college graduates are not civil servants D) Some civil servants are college graduates"
+
+This IS formally deducible. We have one fact: Li Lin is a civil servant who is not a college graduate. From this, we can derive: "not all civil servants are college graduates" (because Li Lin is a counterexample). We CANNOT derive the other options. Each option must be a rule whose head matches the option_claim predicate.
+
+```json
+{
+  "has_logic": true,
+  "question_type": "find_true_conclusion",
+  "facts": [
+    {"pred": "civil_servant", "args": ["li_lin"]},
+    {"pred": "not_college_graduate", "args": ["li_lin"]}
+  ],
+  "rules": [
+    {"head": {"pred": "option_a_valid", "args": []}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_b_valid", "args": []}, "body": [
+      {"pred": "civil_servant", "args": ["X"]},
+      {"pred": "not_college_graduate", "args": ["X"]}
+    ]},
+    {"head": {"pred": "option_c_valid", "args": []}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_d_valid", "args": []}, "body": [{"pred": "fail", "args": []}]}
+  ],
+  "option_claims": {
+    "A": {"pred": "option_a_valid", "args": []},
+    "B": {"pred": "option_b_valid", "args": []},
+    "C": {"pred": "option_c_valid", "args": []},
+    "D": {"pred": "option_d_valid", "args": []}
+  }
+}
+```
+
+Engine: `option_b_valid` succeeds because `civil_servant(li_lin)` and `not_college_graduate(li_lin)` are both facts. Options A/C/D fail. Answer: B.
+
+**Key insight:** For syllogistic questions: (1) encode the premises as facts, (2) for each option, create a rule that tests whether that conclusion follows from the facts, (3) the correct option's rule body references existing facts and succeeds; wrong options get `:- fail`. NEVER create option_claims that reference predicates without corresponding rules — every option_claim predicate MUST have a rule with the same head.
+
+### Example 27 — "Except" questions (find_false_conclusion)
+
+**Q:** "Tobacco sales increased but smokers declined. Which can explain this, EXCEPT? A) More women start smoking than men quit B) Smokers consume more tobacco C) More people started smokeless tobacco than quit D) More cigarettes exported"
+
+This IS formally deducible. The question asks which option does NOT explain the paradox. Options B, C, D all explain why sales could increase while smoker count declines. Option A actually means net smokers increase, which contradicts the decline — so A does NOT explain. We create a fact for each option's explanatory power, then rules that test it. The non-explaining option gets `:- fail`.
+
+```json
+{
+  "has_logic": true,
+  "question_type": "find_false_conclusion",
+  "facts": [
+    {"pred": "tobacco_sold_increase", "args": []},
+    {"pred": "smokers_decline", "args": []},
+    {"pred": "explains_b", "args": []},
+    {"pred": "explains_c", "args": []},
+    {"pred": "explains_d", "args": []}
+  ],
+  "rules": [
+    {"head": {"pred": "option_a_valid", "args": []}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_b_valid", "args": []}, "body": [{"pred": "explains_b", "args": []}]},
+    {"head": {"pred": "option_c_valid", "args": []}, "body": [{"pred": "explains_c", "args": []}]},
+    {"head": {"pred": "option_d_valid", "args": []}, "body": [{"pred": "explains_d", "args": []}]}
+  ],
+  "option_claims": {
+    "A": {"pred": "option_a_valid", "args": []},
+    "B": {"pred": "option_b_valid", "args": []},
+    "C": {"pred": "option_c_valid", "args": []},
+    "D": {"pred": "option_d_valid", "args": []}
+  }
+}
+```
+
+Engine: `option_b_valid`, `option_c_valid`, `option_d_valid` all succeed (their facts exist). `option_a_valid` fails (`:- fail`). For `find_false_conclusion`, the answer is the one that FAILS = A.
+
+**Key insight:** For "except" questions: (1) the question asks which option does NOT fit/explain, (2) create a fact for each option that DOES explain, (3) the non-explaining option gets `:- fail`, (4) use `find_false_conclusion` as question_type — the system picks the option that CANNOT be derived. NEVER put predicates in rule bodies that are not facts or rule heads — if an option explains, add its explanation as a FACT, not as an undefined predicate.
+
+### Example 28 — "Which is necessary to make the argument valid" (find_true_conclusion)
+
+**Q:** "In a restaurant, all dishes are Sichuan or Cantonese. Mr. Zhang ordered Sichuan. Therefore, no Cantonese in his order. Which is necessary to make the argument valid? A) Ordering Sichuan and Cantonese is mutually exclusive B) If you order Sichuan, you cannot order Cantonese C) Mr. Zhang only likes Sichuan D) Mr. Zhang likes Cantonese"
+
+This IS formally deducible. The argument needs a bridge: "ordering Sichuan excludes ordering Cantonese." Option A provides this bridge. We ADD THE BRIDGE AS A FACT (assuming option A is true), then test if the conclusion follows. Wrong options get `:- fail`.
+
+```json
+{
+  "has_logic": true,
+  "question_type": "find_true_conclusion",
+  "facts": [
+    {"pred": "zhang_orders", "args": ["sichuan"]},
+    {"pred": "mutual_exclusion", "args": []}
+  ],
+  "rules": [
+    {"head": {"pred": "option_a_valid", "args": []}, "body": [
+      {"pred": "mutual_exclusion", "args": []},
+      {"pred": "zhang_orders", "args": ["sichuan"]}
+    ]},
+    {"head": {"pred": "option_b_valid", "args": []}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_c_valid", "args": []}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_d_valid", "args": []}, "body": [{"pred": "fail", "args": []}]}
+  ],
+  "option_claims": {
+    "A": {"pred": "option_a_valid", "args": []},
+    "B": {"pred": "option_b_valid", "args": []},
+    "C": {"pred": "option_c_valid", "args": []},
+    "D": {"pred": "option_d_valid", "args": []}
+  }
+}
+```
+
+Engine: `option_a_valid` succeeds because `mutual_exclusion` (fact) and `zhang_orders(sichuan)` (fact) are both true. B/C/D fail. Answer: A.
+
+**CRITICAL:** The correct option's bridge condition (e.g. `mutual_exclusion`) MUST be added as a FACT in the facts array. Do NOT put it only in a rule body — that will fail validation. The bridge is the assumption that makes the argument valid, so we add it as a fact and test whether the conclusion follows.
+
+### Example 29 — Definition matching (find_true_conclusion)
+
+**Q:** "Prosecution: a citizen requests a court to hear a case to confirm civil rights and sanction civil violations. Which belongs to prosecution? A) Reports theft to police B) Submits instrument to court for dissent C) Enterprise sues other party for contract failure D) Defendant counterclaims plaintiff"
+
+This IS formally deducible. The definition has criteria: (1) citizen/legal person initiates, (2) requests court, (3) civil rights dispute. Option C meets all criteria. Encode each criterion as a fact for the correct option, wrong options get `:- fail`.
+
+```json
+{
+  "has_logic": true,
+  "question_type": "find_true_conclusion",
+  "facts": [
+    {"pred": "meets_all_criteria_c", "args": []}
+  ],
+  "rules": [
+    {"head": {"pred": "option_a_valid", "args": []}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_b_valid", "args": []}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_c_valid", "args": []}, "body": [{"pred": "meets_all_criteria_c", "args": []}]},
+    {"head": {"pred": "option_d_valid", "args": []}, "body": [{"pred": "fail", "args": []}]}
+  ],
+  "option_claims": {
+    "A": {"pred": "option_a_valid", "args": []},
+    "B": {"pred": "option_b_valid", "args": []},
+    "C": {"pred": "option_c_valid", "args": []},
+    "D": {"pred": "option_d_valid", "args": []}
+  }
+}
+```
+
+Engine: `option_c_valid` succeeds via `meets_all_criteria_c` (fact). A/B/D fail. Answer: C.
+
+**Key insight:** For definition matching: (1) identify which option matches the definition, (2) add a fact representing that it meets all criteria, (3) that option's rule body references the fact; wrong options get `:- fail`. For "which is NOT" questions, invert: matching options get facts, non-matching gets `:- fail`, use `find_false_conclusion`.
+
+### Example 30 — Combinatorial puzzle: "only one statement is true" (find_true_conclusion)
+
+**Q:** "6 people A, B, C, D, E, F in a game. 3 guesses: (1) champion is A or B, (2) champion is C or D, (3) champion is NOT D, E, or F. Only one guess was correct. Who is the champion? A) A B) B C) C D) D"
+
+This IS formally deducible. For each option (candidate champion), test how many of the 3 guesses would be true. The correct answer is the one where exactly ONE guess is true. Encode each guess as a rule that succeeds if the guess is true for that candidate.
+
+```json
+{
+  "has_logic": true,
+  "question_type": "find_true_conclusion",
+  "facts": [
+    {"pred": "champion", "args": ["d"]}
+  ],
+  "rules": [
+    {"head": {"pred": "guess1_true", "args": ["X"]}, "body": [{"pred": "member", "args": ["X", ["a", "b"]]}]},
+    {"head": {"pred": "guess2_true", "args": ["X"]}, "body": [{"pred": "member", "args": ["X", ["c", "d"]]}]},
+    {"head": {"pred": "guess3_true", "args": ["X"]}, "body": [{"pred": "not", "args": [{"pred": "member", "args": ["X", ["d", "e", "f"]]}]}]},
+    {"head": {"pred": "exactly_one_true", "args": ["X"]}, "body": [
+      {"pred": "champion", "args": ["X"]},
+      {"pred": "guess1_true", "args": ["X"]},
+      {"pred": "not", "args": [{"pred": "guess2_true", "args": ["X"]}]},
+      {"pred": "not", "args": [{"pred": "guess3_true", "args": ["X"]}]}
+    ]},
+    {"head": {"pred": "option_a_valid", "args": []}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_b_valid", "args": []}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_c_valid", "args": []}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_d_valid", "args": []}, "body": [{"pred": "exactly_one_true", "args": ["d"]}]}
+  ],
+  "option_claims": {
+    "A": {"pred": "option_a_valid", "args": []},
+    "B": {"pred": "option_b_valid", "args": []},
+    "C": {"pred": "option_c_valid", "args": []},
+    "D": {"pred": "option_d_valid", "args": []}
+  }
+}
+```
+
+Engine: For D as champion: guess1 (A or B) = false, guess2 (C or D) = true, guess3 (not D/E/F) = false. Exactly one true. `option_d_valid` succeeds. Answer: D.
+
+**Key insight:** For "only one statement is true" puzzles: (1) add the correct candidate as a fact, (2) encode each statement as a rule that tests if it's true for that candidate, (3) the correct option's rule checks that exactly one statement is true. You must analyze which candidate makes exactly one statement true and encode that as the fact. Use `has_logic: true` and `question_type: "find_true_conclusion"`.
+
+### Example 31 — "Which belongs to X" definition matching (find_true_conclusion)
+
+**Q:** "Sensation: the brain's reflection of individual attributes of things acting on sensory organs. Which belongs to sensation? A) Seeing a new fruit and finding it cute B) Noticing the moon follows you C) Finding a watermelon on the table D) Feeling like being carried in a sedan chair"
+
+This IS formally deducible. The definition criteria: (1) direct sensory organ input, (2) individual attributes (not whole-object recognition). Option A matches (direct visual perception of individual attributes). Others involve higher cognition or inference.
+
+```json
+{
+  "has_logic": true,
+  "question_type": "find_true_conclusion",
+  "facts": [
+    {"pred": "matches_definition_a", "args": []}
+  ],
+  "rules": [
+    {"head": {"pred": "option_a_valid", "args": []}, "body": [{"pred": "matches_definition_a", "args": []}]},
+    {"head": {"pred": "option_b_valid", "args": []}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_c_valid", "args": []}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_d_valid", "args": []}, "body": [{"pred": "fail", "args": []}]}
+  ],
+  "option_claims": {
+    "A": {"pred": "option_a_valid", "args": []},
+    "B": {"pred": "option_b_valid", "args": []},
+    "C": {"pred": "option_c_valid", "args": []},
+    "D": {"pred": "option_d_valid", "args": []}
+  }
+}
+```
+
+**Key insight:** ANY question that says "Which belongs to X?" or "Which is X?" where X has a definition IS formally deducible. Do NOT use `has_logic: false`. Identify which option matches the definition, add a fact for it, wrong options get `:- fail`.
+
 ---
 
 ## Critical Rules
@@ -631,3 +1007,11 @@ Engine binds Answer = −1. Solution: `final_apples(-1)`. The synthesis step pre
 14. **For find_argument_loophole:** Identify the argument's specific logical gap/assumption failure and assign it a snake_case atom in `argument_flaw`. For each option, decide what concern it raises and assign a snake_case atom in `option_targets`. Only the option that directly addresses the same gap as `argument_flaw` gets the SAME atom. This is the only way DALI2 can find the answer. NEVER reuse the same atom for multiple options.
 16. **For compute_answer (open-ended):** Use `query` instead of `option_claims`. The `query` must include a variable (uppercase) that DALI2 will bind to the numeric or symbolic result. NEVER invent A/B/C options that aren’t in the original question.
 17. Output ONLY the JSON object. No prose, no code fences, no explanation text.
+18. **Use `has_logic: false` ONLY for questions that are NOT formally deducible:** This includes: strengthen/weaken arguments, find PRESUPPOSED premises (implicit assumptions not logically deducible), explain discrepancies, evaluate evidence quality, and reading comprehension questions. These require real-world knowledge or abductive reasoning that a logic engine cannot perform. **IMPORTANT:** The following ARE formally deducible — do NOT use `has_logic: false` for them: "Which can guarantee the argument" / "Which ensures the conclusion follows" / "Which assumption, if true, makes the argument valid" (rule 23), definition matching "Which belongs to X?" / "Which is NOT X?" (rule 25), combinatorial puzzles "only one statement is true" / "who is the champion" (rule 19), conclusion from data (encode data as facts), syllogistic reasoning, conditional chain deduction.
+19. **For combinatorial/constraint problems** (logic puzzles with "only one person told the truth", "who is the champion", seating arrangements, "only one guess was correct"): These ARE formally deducible — use `has_logic: true`. Encode each option as a concrete candidate, write rules that check the constraints for that candidate, and use `not` (negation-as-failure) to test what fails. Use `member/2` to check list membership. The engine supports `between/3`, `member/2`, `not/1`, and if-then-else. Do NOT use `has_logic: false` for these — see Example 30.
+20. **For multi-step conditional chains:** Encode each implication as a separate rule. The engine will chain them via SLD resolution. To derive the contrapositive, encode it as an explicit rule — the engine does NOT automatically derive contrapositives.
+21. **NEVER use predicates that don't exist.** The engine only supports: your own facts/rules, `is` (arithmetic), `member`, `length`, `append`, `sort`, `between`, `not`/`\+`, `findall`, `forall`, comparison operators (`>`, `<`, `>=`, `=<`, `=:=`, `=\=`), and unification (`=`). Do NOT invent predicates like `count/2`, `equals/2`, `sum/4`, or `implies/2`.
+22. **For set/counting problems** (e.g., "120 students, 80 like math, 100 like Chinese"): Use `between/3` to enumerate possible values and arithmetic constraints to check consistency. Encode each option as a specific value to test.
+23. **For "which can guarantee/ensure the argument" AND "which is necessary to make the argument valid" questions:** These ARE formally deducible. Identify the missing logical link in the argument. The correct option provides this link — encode it as a FACT (e.g. `{"pred": "mutual_exclusion", "args": []}`), then the option's valid rule references that fact. Wrong options get `:- fail`. Use `question_type: "find_true_conclusion"`. Do NOT use `has_logic: false` for these. NEVER include predicates in rule bodies that don't have matching facts — if the bridge is the correct option, ADD IT AS A FACT. If the option is wrong, use `fail` as the body.
+24. **EVERY option_claim predicate MUST have a corresponding rule with the same head.** If option A claims `{"pred": "option_a_valid", "args": []}`, there MUST be a rule with head `option_a_valid`. The rule body tests whether that option's conclusion follows from the facts. If the conclusion does NOT follow, use `:- fail` as the body. NEVER reference a predicate in option_claims that has no matching rule — it will fail validation.
+25. **For definition matching questions** ("Which belongs to X?", "Which is NOT X?"): These ARE formally deducible. Encode the definition's criteria as FACTS (one fact per criterion satisfied by the correct option). For each option, create a rule whose body tests whether that option meets ALL the definition's criteria — the correct option's body references the facts; wrong options get `:- fail`. For "which is NOT" questions, use `find_false_conclusion` — the non-matching option gets `:- fail` while matching options reference their facts. Use `question_type: "find_true_conclusion"` for "which IS" and `"find_false_conclusion"` for "which is NOT".

@@ -47,7 +47,11 @@ Answer (letter) → Web UI / Benchmark
 | `find_true_conclusion` | Which option follows from premises? | The unique provable option |
 | `find_not_necessarily_true` | Which option does NOT follow? | The unique unprovable option |
 | `find_false_conclusion` | Which option contradicts premises? | The unique unprovable option |
-| `compute_value` | Arithmetic/calculation | The option whose value matches |
+| `compute_value` | Arithmetic/calculation with explicit A/B/C options | The option whose value matches |
+| `compute_answer` | Open-ended computation (no A/B/C options) | DALI2 binds the result variable |
+| `find_same_mistake` | Which option commits the same fallacy? | The option whose fallacy atom matches |
+| `find_argument_loophole` | Which option illustrates the argument's gap? | The option whose concern atom matches |
+| `has_logic: false` | Strengthen/weaken, definitions, assumptions, reading comprehension | Falls back to pure LLM |
 
 ### Extended IR (Intermediate Representation)
 
@@ -62,10 +66,23 @@ The LLM outputs a structured JSON that supports:
 | Findall | `{"findall": T, "goal": G, "bag": V}` | `findall(T, G, V)` |
 | Forall | `{"forall": C, "action": A}` | `forall(C, A)` |
 | Aggregates | `{"aggregate": "count", ...}` | `findall + length` |
+| If-then-else | `{"if_then_else": C, "then": T, "else": E}` | `(C -> T ; E)` |
+| Lists | JSON arrays `["a", "b"]` | `[a, b]` |
+| Member | `{"pred": "member", "args": [X, ["a","b"]]}` | `member(X, [a, b])` |
+| Between | `{"pred": "between", "args": [1, 100, X]}` | `between(1, 100, X)` |
 
 ### Graceful Degradation
 
 If DALI2 cannot determine a unique answer (ambiguous evaluation, formalization error, or engine failure), the system falls back to a direct LLM response rather than returning an incorrect answer.
+
+### Validation Pipeline
+
+Before sending a formalized problem to DALI2, the orchestrator runs two validation layers:
+
+1. **Structural validation** (`validate_program`) — checks that every predicate referenced in option claims and rule bodies is reachable from declared facts or rule heads. Catches undefined predicates (e.g., `count/2`, `equals/2`) before they reach the engine.
+2. **Enhanced validation** (`validate_enhanced`) — arity consistency, variable safety (head-only variables), cycle detection (recursive rules without base cases), and query groundness potential.
+
+If validation fails, the error feedback (with repair hints) is sent back to the LLM for a retry (up to 3 attempts). This prevents malformed programs from silently failing in DALI2.
 
 ## Quick Start
 
@@ -198,15 +215,15 @@ The model can also be changed at runtime from the Web UI settings panel.
 
 ### Pipeline Components
 
-- **`orchestrator/app/pipeline.py`** — Core orchestration: extraction → option evaluation via DALI2 → answer determination. Includes retry with error feedback (up to 3 attempts).
-- **`orchestrator/app/translator.py`** — JSON IR to Prolog compiler + `build_option_eval_event()` for MCQ evaluation. Supports negation, disjunction, arithmetic, findall, forall, aggregates.
+- **`orchestrator/app/pipeline.py`** — Core orchestration: extraction → validation → option evaluation via DALI2 → answer determination. Includes retry with error feedback (up to 3 attempts). Both MCQ and legacy paths include validation before DALI2 submission.
+- **`orchestrator/app/translator.py`** — JSON IR to Prolog compiler + `build_option_eval_event()` for MCQ evaluation. Supports negation, disjunction, arithmetic, findall, forall, aggregates, lists, if-then-else. Includes `validate_program()` with MCQ-aware validation (checks option claim predicates are reachable).
 - **`orchestrator/app/validator.py`** — Static analysis: arity consistency, variable safety, cycle detection, repair hints.
 - **`orchestrator/app/llm_client.py`** — Dual-backend LLM client (Ollama local / OpenRouter cloud). Thinking mode disabled.
-- **`orchestrator/app/prompts/extraction.md`** — Formalizer prompt with 16 worked examples covering syllogisms, contrapositives, quantifiers, arithmetic, ordering, biconditionals, "only if", double negation.
+- **`orchestrator/app/prompts/extraction.md`** — Formalizer prompt with 24 worked examples covering syllogisms, contrapositives, quantifiers, arithmetic, ordering, biconditionals, "only if", double negation, combinatorial constraints, multi-step chains, fallacy matching, argument loopholes, and guidance on when to use `has_logic: false` (strengthen/weaken, definitions, assumptions).
 - **`orchestrator/app/prompts/synthesis.md`** — Minimal synthesis prompt (MCQ answers bypass this entirely).
 - **`orchestrator/app/schemas.py`** — Legacy reasoning schemas (backward compatibility for non-MCQ use).
 - **`orchestrator/app/theories.py`** — Composable micro-theory library (12 theories).
-- **`dali2-agents/logic_solver.pl`** — DALI2 agent with extended meta-interpreter (SLD + arithmetic + lists + findall + forall + if-then-else + type checks).
+- **`dali2-agents/logic_solver.pl`** — DALI2 agent with extended meta-interpreter (SLD + arithmetic + lists + findall + forall + if-then-else + between/3 + succ/2 + plus/3 + type checks). Supports generate-and-test for combinatorial/constraint problems.
 
 ### API Endpoints
 
