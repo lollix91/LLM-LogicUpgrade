@@ -987,6 +987,42 @@ This IS formally deducible. The definition criteria: (1) direct sensory organ in
 
 **Key insight:** ANY question that says "Which belongs to X?" or "Which is X?" where X has a definition IS formally deducible. Do NOT use `has_logic: false`. Identify which option matches the definition, add a fact for it, wrong options get `:- fail`.
 
+### Example 32 — "All but which can be derived" / "Which cannot be derived" (find_not_necessarily_true)
+
+**Q:** "The Watt who invented the steam engine is not American. All but which of the following can be derived from the above conclusion? A) Watt is not American B) Some inventors are American C) It was the inventor who invented the steam engine D) Watt is an inventor"
+
+This IS formally deducible. The premise gives us: Watt invented the steam engine (fact), Watt is not American (fact). From these we CAN derive A (direct restatement), C (Watt invented → someone invented), D (Watt invented → Watt is an inventor). But B (some inventors are American) does NOT follow — we only know Watt is NOT American. Encode derivable options with facts, non-derivable gets `:- fail`. Use `find_not_necessarily_true` — the answer is the one that CANNOT be derived.
+
+```json
+{
+  "has_logic": true,
+  "question_type": "find_not_necessarily_true",
+  "facts": [
+    {"pred": "watt_invented_steam_engine", "args": []},
+    {"pred": "watt_not_american", "args": []},
+    {"pred": "derivable_a", "args": []},
+    {"pred": "derivable_c", "args": []},
+    {"pred": "derivable_d", "args": []}
+  ],
+  "rules": [
+    {"head": {"pred": "option_a_valid", "args": []}, "body": [{"pred": "derivable_a", "args": []}]},
+    {"head": {"pred": "option_b_valid", "args": []}, "body": [{"pred": "fail", "args": []}]},
+    {"head": {"pred": "option_c_valid", "args": []}, "body": [{"pred": "derivable_c", "args": []}]},
+    {"head": {"pred": "option_d_valid", "args": []}, "body": [{"pred": "derivable_d", "args": []}]}
+  ],
+  "option_claims": {
+    "A": {"pred": "option_a_valid", "args": []},
+    "B": {"pred": "option_b_valid", "args": []},
+    "C": {"pred": "option_c_valid", "args": []},
+    "D": {"pred": "option_d_valid", "args": []}
+  }
+}
+```
+
+Engine: A, C, D succeed (derivable). B fails (`:- fail`). For `find_not_necessarily_true`, the answer is the one that CANNOT be derived = B. Answer: B.
+
+**Key insight:** "All but which can be derived" / "Which cannot be derived" / "Which is NOT necessarily true" questions ARE formally deducible. Encode the premises as facts, add a fact for each DERIVABLE option, and use `:- fail` for the NON-derivable option. Use `question_type: "find_not_necessarily_true"`. Do NOT use `has_logic: false` for these.
+
 ---
 
 ## Critical Rules
@@ -1007,11 +1043,12 @@ This IS formally deducible. The definition criteria: (1) direct sensory organ in
 14. **For find_argument_loophole:** Identify the argument's specific logical gap/assumption failure and assign it a snake_case atom in `argument_flaw`. For each option, decide what concern it raises and assign a snake_case atom in `option_targets`. Only the option that directly addresses the same gap as `argument_flaw` gets the SAME atom. This is the only way DALI2 can find the answer. NEVER reuse the same atom for multiple options.
 16. **For compute_answer (open-ended):** Use `query` instead of `option_claims`. The `query` must include a variable (uppercase) that DALI2 will bind to the numeric or symbolic result. NEVER invent A/B/C options that aren’t in the original question.
 17. Output ONLY the JSON object. No prose, no code fences, no explanation text.
-18. **Use `has_logic: false` ONLY for questions that are NOT formally deducible:** This includes: strengthen/weaken arguments, find PRESUPPOSED premises (implicit assumptions not logically deducible), explain discrepancies, evaluate evidence quality, and reading comprehension questions. These require real-world knowledge or abductive reasoning that a logic engine cannot perform. **IMPORTANT:** The following ARE formally deducible — do NOT use `has_logic: false` for them: "Which can guarantee the argument" / "Which ensures the conclusion follows" / "Which assumption, if true, makes the argument valid" (rule 23), definition matching "Which belongs to X?" / "Which is NOT X?" (rule 25), combinatorial puzzles "only one statement is true" / "who is the champion" (rule 19), conclusion from data (encode data as facts), syllogistic reasoning, conditional chain deduction.
+18. **Use `has_logic: false` ONLY for questions that are NOT formally deducible:** This includes: strengthen/weaken arguments, find PRESUPPOSED premises (implicit assumptions not logically deducible), explain discrepancies, evaluate evidence quality, and reading comprehension questions. These require real-world knowledge or abductive reasoning that a logic engine cannot perform. **IMPORTANT:** The following ARE formally deducible — do NOT use `has_logic: false` for them: "Which can guarantee the argument" / "Which ensures the conclusion follows" / "Which assumption, if true, makes the argument valid" (rule 23), definition matching "Which belongs to X?" / "Which is NOT X?" (rule 25), combinatorial puzzles "only one statement is true" / "who is the champion" (rule 19), "All but which can be derived" / "Which cannot be derived" (rule 26), conclusion from data (encode data as facts), syllogistic reasoning, conditional chain deduction.
 19. **For combinatorial/constraint problems** (logic puzzles with "only one person told the truth", "who is the champion", seating arrangements, "only one guess was correct"): These ARE formally deducible — use `has_logic: true`. Encode each option as a concrete candidate, write rules that check the constraints for that candidate, and use `not` (negation-as-failure) to test what fails. Use `member/2` to check list membership. The engine supports `between/3`, `member/2`, `not/1`, and if-then-else. Do NOT use `has_logic: false` for these — see Example 30.
 20. **For multi-step conditional chains:** Encode each implication as a separate rule. The engine will chain them via SLD resolution. To derive the contrapositive, encode it as an explicit rule — the engine does NOT automatically derive contrapositives.
 21. **NEVER use predicates that don't exist.** The engine only supports: your own facts/rules, `is` (arithmetic), `member`, `length`, `append`, `sort`, `between`, `not`/`\+`, `findall`, `forall`, comparison operators (`>`, `<`, `>=`, `=<`, `=:=`, `=\=`), and unification (`=`). Do NOT invent predicates like `count/2`, `equals/2`, `sum/4`, or `implies/2`.
 22. **For set/counting problems** (e.g., "120 students, 80 like math, 100 like Chinese"): Use `between/3` to enumerate possible values and arithmetic constraints to check consistency. Encode each option as a specific value to test.
 23. **For "which can guarantee/ensure the argument" AND "which is necessary to make the argument valid" questions:** These ARE formally deducible. Identify the missing logical link in the argument. The correct option provides this link — encode it as a FACT (e.g. `{"pred": "mutual_exclusion", "args": []}`), then the option's valid rule references that fact. Wrong options get `:- fail`. Use `question_type: "find_true_conclusion"`. Do NOT use `has_logic: false` for these. NEVER include predicates in rule bodies that don't have matching facts — if the bridge is the correct option, ADD IT AS A FACT. If the option is wrong, use `fail` as the body.
-24. **EVERY option_claim predicate MUST have a corresponding rule with the same head.** If option A claims `{"pred": "option_a_valid", "args": []}`, there MUST be a rule with head `option_a_valid`. The rule body tests whether that option's conclusion follows from the facts. If the conclusion does NOT follow, use `:- fail` as the body. NEVER reference a predicate in option_claims that has no matching rule — it will fail validation.
+24. **EVERY option_claim predicate MUST have a corresponding rule with the EXACT same head name and arity.** If option A claims `{"pred": "option_a_valid", "args": []}`, there MUST be a rule with head `{"pred": "option_a_valid", "args": []}`. Do NOT use different predicate names in option_claims vs rules (e.g. if option_claim uses `d_gt_a`, the rule head MUST be `d_gt_a`, NOT `d_heavier_than_a` or `option_a_valid`). The rule body tests whether that option's conclusion follows from the facts. If the conclusion does NOT follow, use `:- fail` as the body. NEVER reference a predicate in option_claims that has no matching rule — it will fail validation.
 25. **For definition matching questions** ("Which belongs to X?", "Which is NOT X?"): These ARE formally deducible. Encode the definition's criteria as FACTS (one fact per criterion satisfied by the correct option). For each option, create a rule whose body tests whether that option meets ALL the definition's criteria — the correct option's body references the facts; wrong options get `:- fail`. For "which is NOT" questions, use `find_false_conclusion` — the non-matching option gets `:- fail` while matching options reference their facts. Use `question_type: "find_true_conclusion"` for "which IS" and `"find_false_conclusion"` for "which is NOT".
+26. **For "All but which can be derived" / "Which cannot be derived" / "Which is NOT necessarily true" questions:** These ARE formally deducible — do NOT use `has_logic: false`. Encode the premises as facts. For each option that CAN be derived from the premises, add a fact (e.g. `derivable_a`) and the option's rule references it. For the option that CANNOT be derived, use `:- fail`. Use `question_type: "find_not_necessarily_true"` — the answer is the one that CANNOT be derived. See Example 32.
