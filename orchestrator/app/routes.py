@@ -34,35 +34,43 @@ async def chat(request: ChatRequest):
     conv_id = request.conversation_id
     history = []
 
-    if conv_id:
-        conv = get_conversation(conv_id)
-        if conv:
-            history = conv["messages"]
+    try:
+        if conv_id:
+            conv = get_conversation(conv_id)
+            if conv:
+                history = conv["messages"]
+            else:
+                conv_id = create_conversation()
         else:
             conv_id = create_conversation()
-    else:
-        conv_id = create_conversation()
 
-    # Save user message
-    add_message(conv_id, "user", request.message)
+        # Save user message
+        add_message(conv_id, "user", request.message)
+    except Exception as e:
+        print(f"[WARN] DB error (user msg): {e}", flush=True)
+        if not conv_id:
+            conv_id = "tmp-" + str(id(request))
 
     # Run pipeline
     result = await run_pipeline(request.message, history, skip_logic=request.skip_logic)
 
-    # Save assistant response
-    trace_dicts = [step.model_dump() for step in result["reasoning_trace"]]
-    add_message(
-        conv_id,
-        "assistant",
-        result["answer"],
-        reasoning_trace=trace_dicts,
-        has_logic=result["has_logic"],
-    )
+    try:
+        # Save assistant response
+        trace_dicts = [step.model_dump() for step in result["reasoning_trace"]]
+        add_message(
+            conv_id,
+            "assistant",
+            result["answer"],
+            reasoning_trace=trace_dicts,
+            has_logic=result["has_logic"],
+        )
 
-    # Auto-title on first message
-    if not history:
-        title = request.message[:50] + ("..." if len(request.message) > 50 else "")
-        update_conversation_title(conv_id, title)
+        # Auto-title on first message
+        if not history:
+            title = request.message[:50] + ("..." if len(request.message) > 50 else "")
+            update_conversation_title(conv_id, title)
+    except Exception as e:
+        print(f"[WARN] DB error (assistant msg): {e}", flush=True)
 
     return ChatResponse(
         conversation_id=conv_id,

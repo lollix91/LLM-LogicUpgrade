@@ -443,4 +443,4 @@ async def _direct_response(user_message: str, history: list[dict]) -> str:
 
     messages.append({"role": "user", "content": user_message})
 
-    return await llm_client.chat(messages, temperature=0.7, think=False, max_tokens=1024)
+    return await llm_client.chat(messages, temperature=0.3, think=False, max_tokens=1024)
