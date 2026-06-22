@@ -39,6 +39,15 @@ export interface ConversationDetail {
 export interface ModelInfo {
   current_model: string;
   available_models: string[];
+  backend: string;
+  api_key_set: boolean;
+}
+
+export interface BackendInfo {
+  backend: string;
+  api_key_set: boolean;
+  current_model: string;
+  available_models?: string[];
 }
 
 export async function sendMessage(message: string, conversationId?: string): Promise<ChatResponse> {
@@ -89,4 +98,38 @@ export async function pullModel(model: string): Promise<void> {
     body: JSON.stringify({ model }),
   });
   if (!res.ok) throw new Error(`Failed to pull model`);
+}
+
+export async function getBackendInfo(): Promise<BackendInfo> {
+  const res = await fetch(`${API_BASE}/backend`);
+  if (!res.ok) throw new Error(`Failed to fetch backend info`);
+  return res.json();
+}
+
+export async function switchBackend(backend: string): Promise<BackendInfo> {
+  const res = await fetch(`${API_BASE}/backend`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ backend }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(err.detail || `Failed to switch backend`);
+  }
+  return res.json();
+}
+
+export async function updateApiKey(apiKey: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api-key`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+  if (!res.ok) throw new Error(`Failed to update API key`);
+}
+
+export async function searchModels(q: string, limit: number = 50): Promise<{ models: string[]; total: number }> {
+  const res = await fetch(`${API_BASE}/models/search?q=${encodeURIComponent(q)}&limit=${limit}`);
+  if (!res.ok) throw new Error(`Failed to search models`);
+  return res.json();
 }

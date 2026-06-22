@@ -29,6 +29,16 @@ class ModelChangeRequest(BaseModel):
 class ModelInfo(BaseModel):
     current_model: str
     available_models: list[str]
+    backend: str = "ollama"
+    api_key_set: bool = False
+
+
+class BackendSwitchRequest(BaseModel):
+    backend: str  # "ollama" or "openrouter"
+
+
+class ApiKeyUpdateRequest(BaseModel):
+    api_key: str
 
 
 class ConversationSummary(BaseModel):

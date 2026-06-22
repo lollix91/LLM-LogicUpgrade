@@ -6,6 +6,8 @@ from app.models import (
     ChatResponse,
     ModelChangeRequest,
     ModelInfo,
+    BackendSwitchRequest,
+    ApiKeyUpdateRequest,
     ConversationSummary,
     ConversationDetail,
 )
@@ -110,28 +112,19 @@ async def remove_conversation(conv_id: str):
 
 @router.get("/api/model", response_model=ModelInfo)
 async def get_model_info():
-    """Get current model and available models."""
+    """Get current model, backend, and available models."""
     models = await llm_client.list_models()
     return ModelInfo(
         current_model=llm_client.get_model(),
         available_models=models,
+        backend=llm_client.get_backend(),
+        api_key_set=bool(llm_client.get_api_key()),
     )
 
 
 @router.post("/api/model")
 async def change_model(request: ModelChangeRequest):
     """Change the active LLM model."""
-    # Check if model exists
-    models = await llm_client.list_models()
-    if request.model not in models:
-        # Try to pull it
-        success = await llm_client.pull_model(request.model)
-        if not success:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Model '{request.model}' not found and could not be pulled",
-            )
-
     llm_client.set_model(request.model)
     return {"status": "ok", "model": request.model}
 
@@ -143,6 +136,56 @@ async def pull_model(request: ModelChangeRequest):
     if not success:
         raise HTTPException(status_code=400, detail=f"Failed to pull model '{request.model}'")
     return {"status": "ok", "model": request.model}
+
+
+# --- Backend Management ---
+
+
+@router.get("/api/backend")
+async def get_backend_info():
+    """Get current backend info."""
+    return {
+        "backend": llm_client.get_backend(),
+        "api_key_set": bool(llm_client.get_api_key()),
+        "current_model": llm_client.get_model(),
+    }
+
+
+@router.post("/api/backend")
+async def switch_backend(request: BackendSwitchRequest):
+    """Switch between ollama and openrouter backends."""
+    if request.backend not in ("ollama", "openrouter"):
+        raise HTTPException(status_code=400, detail="Backend must be 'ollama' or 'openrouter'")
+    if request.backend == "openrouter" and not llm_client.get_api_key():
+        raise HTTPException(status_code=400, detail="No OpenRouter API key set. Please set an API key first.")
+    llm_client.set_backend(request.backend)
+    try:
+        models = await llm_client.list_models()
+    except Exception:
+        models = []
+    return {
+        "status": "ok",
+        "backend": request.backend,
+        "current_model": llm_client.get_model(),
+        "available_models": models,
+    }
+
+
+@router.post("/api/api-key")
+async def update_api_key(request: ApiKeyUpdateRequest):
+    """Update the OpenRouter API key."""
+    llm_client.set_api_key(request.api_key)
+    return {"status": "ok", "api_key_set": bool(request.api_key)}
+
+
+@router.get("/api/models/search")
+async def search_models(q: str = "", limit: int = 50):
+    """Search available models on the current backend (useful for OpenRouter with 100+ models)."""
+    models = await llm_client.list_models()
+    if q:
+        q_lower = q.lower()
+        models = [m for m in models if q_lower in m.lower()]
+    return {"models": models[:limit], "total": len(models)}
 
 
 # --- Capabilities ---
