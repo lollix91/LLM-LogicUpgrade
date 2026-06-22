@@ -74,18 +74,22 @@ async def _chat_openrouter(
     }
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
+
+    is_qwen = "qwen" in _current_model.lower()
+
     if not think:
-        payload["reasoning"] = {"effort": "none", "enabled": False}
-        payload["provider"] = {
-            "order": ["Together", "DeepInfra", "Venice"],
-            "allow_fallbacks": True,
-        }
-        if messages and messages[0]["role"] == "system":
-            messages = list(messages)
-            messages[0] = {
-                "role": "system",
-                "content": messages[0]["content"] + "\n\n/no_think"
+        if is_qwen:
+            payload["reasoning"] = {"effort": "none", "enabled": False}
+            payload["provider"] = {
+                "order": ["Together", "DeepInfra", "Venice"],
+                "allow_fallbacks": True,
             }
+            if messages and messages[0]["role"] == "system":
+                messages = list(messages)
+                messages[0] = {
+                    "role": "system",
+                    "content": messages[0]["content"] + "\n\n/no_think"
+                }
 
     headers = {
         "Authorization": f"Bearer {_api_key}",
@@ -100,6 +104,9 @@ async def _chat_openrouter(
             json=payload,
             headers=headers,
         )
+        if response.status_code != 200:
+            err_body = response.text[:500]
+            print(f"[ERROR] OpenRouter {response.status_code}: {err_body}", flush=True)
         response.raise_for_status()
         data = response.json()
         msg = data["choices"][0]["message"]
